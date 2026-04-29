@@ -1,5 +1,6 @@
 #include "DroneApp.h"
 #include "../drivers/AxpPower.h"
+#include "../navigation/Navigator.h"
 
 static const char* modeName(ControlMode m) {
     switch (m) {
@@ -75,10 +76,17 @@ void DroneApp::controlTick(uint32_t nowMs) {
     if (activeMode_ == ControlMode::ManualServo ||
         activeMode_ == ControlMode::ManualProp) {
         lastCommand_ = manual_.update(lastFrame_, activeMode_, nowMs);
-    } else {
-        // Failsafe or unimplemented Automatic: safe defaults
+        lastTargetActive_ = false;
+    } else if (activeMode_ == ControlMode::Automatic) {
         manual_.reset();
+        lastTargetActive_ = mission_.update(gps_.position(), lastTarget_);
+        // AutoController steering goes here in Phase 6 — safe defaults for now
         lastCommand_ = ActuatorCommand{};
+    } else {
+        // Failsafe
+        manual_.reset();
+        lastCommand_      = ActuatorCommand{};
+        lastTargetActive_ = false;
     }
 
     actuators_.write(lastCommand_);
@@ -103,5 +111,27 @@ void DroneApp::debugTick() {
             (unsigned)gp.satellites, gp.hdop, (unsigned long)gp.ageMs);
     } else {
         Serial.println("[GPS ] NO FIX");
+    }
+
+    if (activeMode_ == ControlMode::Automatic) {
+        static const char* stateNames[] = { "IDLE", "RUNNING", "RETURNING", "COMPLETE" };
+        const char* modeName = (mission_.mode() == MissionMode::Circuit) ? "CIRCUIT" : "LINEAR ";
+        const uint8_t s = static_cast<uint8_t>(mission_.state());
+
+        if (lastTargetActive_ && gp.valid) {
+            const float dist    = Navigator::distanceM(gp.lat, gp.lon, lastTarget_.lat, lastTarget_.lon);
+            const float bearing = Navigator::bearingDeg(gp.lat, gp.lon, lastTarget_.lat, lastTarget_.lon);
+            Serial.printf("[MISN ] %s %s wp=%u/%u target=(%.6f,%.6f r=%.0fm) dist=%.0fm brg=%.0f°\n",
+                stateNames[s], modeName,
+                (unsigned)mission_.currentIndex() + 1, (unsigned)mission_.waypointCount(),
+                lastTarget_.lat, lastTarget_.lon, lastTarget_.radiusM,
+                dist, bearing);
+        } else {
+            Serial.printf("[MISN ] %s %s wp=%u/%u home=%s%s\n",
+                stateNames[s], modeName,
+                (unsigned)mission_.currentIndex() + 1, (unsigned)mission_.waypointCount(),
+                mission_.hasHome() ? "SET" : "NOT SET",
+                !gp.valid ? " (no GPS fix)" : "");
+        }
     }
 }

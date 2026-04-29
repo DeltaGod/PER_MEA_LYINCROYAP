@@ -36,3 +36,21 @@ struct GpsPosition {
     float    hdop       = 99.9f;
     uint32_t ageMs      = 0xFFFFFFFFUL;  // millis since last valid fix
 };
+
+struct Waypoint {
+    double lat     = 0.0;
+    double lon     = 0.0;
+    float  radiusM = 10.0f;
+};
+
+enum class MissionMode : uint8_t {
+    Linear  = 0,  // visit waypoints in order, then return to home point
+    Circuit = 1   // loop through waypoints indefinitely
+};
+
+enum class MissionState : uint8_t {
+    Idle      = 0,  // no mission running
+    Running   = 1,  // navigating toward waypoints
+    Returning = 2,  // heading to home point (linear complete or emergency)
+    Complete  = 3   // arrived at home after linear mission
+};
