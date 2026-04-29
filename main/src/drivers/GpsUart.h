@@ -12,7 +12,17 @@ public:
     void update();
     const GpsPosition& position() const { return pos_; }
 
+    uint32_t    charsProcessed()   const { return gps_.charsProcessed(); }
+    uint32_t    sentencesWithFix() const { return gps_.sentencesWithFix(); }
+    uint32_t    failedChecksums()  const { return gps_.failedChecksum(); }
+    const char* lastLine()         const { return completedLine_; }
+    uint8_t     satsInView();
+
 private:
-    TinyGPSPlus  gps_;
-    GpsPosition  pos_;
+    TinyGPSPlus   gps_;
+    TinyGPSCustom gsvTotal_;   // total satellites in view from $GPGSV field 3
+    GpsPosition   pos_;
+    char          lineBuf_[96]       = {};
+    char          completedLine_[96] = {};
+    uint8_t       lineLen_           = 0;
 };

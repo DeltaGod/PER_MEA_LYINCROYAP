@@ -2,13 +2,28 @@
 #include "../config/BoardConfig.h"
 
 void GpsUart::begin() {
+    gsvTotal_.begin(gps_, "GPGSV", 3);  // field 3 = total satellites in view
     Serial1.begin(BoardConfig::GPS_BAUD_RATE, SERIAL_8N1,
                   BoardConfig::GPS_RX_PIN, BoardConfig::GPS_TX_PIN);
 }
 
+uint8_t GpsUart::satsInView() {
+    return gsvTotal_.isValid() ? (uint8_t)atoi(gsvTotal_.value()) : 0;
+}
+
 void GpsUart::update() {
     while (Serial1.available()) {
-        gps_.encode(Serial1.read());
+        char c = Serial1.read();
+        gps_.encode(c);
+
+        // Capture last complete NMEA sentence into completedLine_
+        if (c == '\n') {
+            lineBuf_[lineLen_] = '\0';
+            memcpy(completedLine_, lineBuf_, lineLen_ + 1);
+            lineLen_ = 0;
+        } else if (c != '\r' && lineLen_ < sizeof(lineBuf_) - 1) {
+            lineBuf_[lineLen_++] = c;
+        }
     }
 
     pos_.valid      = gps_.location.isValid();

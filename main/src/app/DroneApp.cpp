@@ -110,7 +110,12 @@ void DroneApp::debugTick() {
             gp.lat, gp.lon, gp.speedKmph, gp.courseDeg,
             (unsigned)gp.satellites, gp.hdop, (unsigned long)gp.ageMs);
     } else {
-        Serial.println("[GPS ] NO FIX");
+        Serial.printf("[GPS ] NO FIX  visible=%u  chars=%lu  badCRC=%lu\n",
+            (unsigned)gps_.satsInView(),
+            (unsigned long)gps_.charsProcessed(),
+            (unsigned long)gps_.failedChecksums());
+        if (gps_.lastLine()[0] != '\0')
+            Serial.printf("       last: %s\n", gps_.lastLine());
     }
 
     if (activeMode_ == ControlMode::Automatic) {
