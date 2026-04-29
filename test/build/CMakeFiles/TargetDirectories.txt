@@ -1,0 +1,3 @@
+/home/facundo/Proyectos/PER_Dron_a_voile/Informatica/Post-Claude/test/build/CMakeFiles/test_runner.dir
+/home/facundo/Proyectos/PER_Dron_a_voile/Informatica/Post-Claude/test/build/CMakeFiles/edit_cache.dir
+/home/facundo/Proyectos/PER_Dron_a_voile/Informatica/Post-Claude/test/build/CMakeFiles/rebuild_cache.dir

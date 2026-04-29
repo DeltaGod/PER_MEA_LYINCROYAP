@@ -1,0 +1,65 @@
+#include "McpwmActuators.h"
+#include "../config/BoardConfig.h"
+#include "../config/Calibration.h"
+#include "driver/mcpwm.h"
+
+bool McpwmActuators::begin() {
+    bool ok = true;
+    ok &= (mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM0A, BoardConfig::SAIL_SERVO_PIN)  == ESP_OK);
+    ok &= (mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM0B, BoardConfig::ROTOR_SERVO_PIN) == ESP_OK);
+    ok &= (mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM1A, BoardConfig::ESC1_PIN)        == ESP_OK);
+    ok &= (mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM1B, BoardConfig::ESC2_PIN)        == ESP_OK);
+
+    mcpwm_config_t cfg   = {};
+    cfg.frequency        = Calibration::PWM_FREQ_HZ;
+    cfg.cmpr_a           = 0.0f;
+    cfg.cmpr_b           = 0.0f;
+    cfg.counter_mode     = MCPWM_UP_COUNTER;
+    cfg.duty_mode        = MCPWM_DUTY_MODE_0;
+
+    ok &= (mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_0, &cfg) == ESP_OK);
+    ok &= (mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_1, &cfg) == ESP_OK);
+
+    // Output safe starting positions immediately
+    mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, Calibration::SAIL_CENTER_US);
+    mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_B, Calibration::ROTOR_STOP_US);
+    mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_A, Calibration::ESC_STOP_US);
+    mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_B, Calibration::ESC_STOP_US);
+
+    initialized_ = ok;
+    return ok;
+}
+
+uint16_t McpwmActuators::clamp(uint16_t v, uint16_t lo, uint16_t hi) {
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
+
+uint16_t McpwmActuators::slew(uint16_t current, uint16_t target, uint16_t step) {
+    if (current < target) {
+        const uint32_t next = static_cast<uint32_t>(current) + step;
+        return (next >= target) ? target : static_cast<uint16_t>(next);
+    }
+    if (current > target) {
+        return (current > static_cast<uint16_t>(target + step)) ? static_cast<uint16_t>(current - step) : target;
+    }
+    return current;
+}
+
+void McpwmActuators::write(const ActuatorCommand& cmd) {
+    if (!initialized_) return;
+
+    const uint16_t sail  = clamp(cmd.sailUs,  1000, 2000);
+    const uint16_t rotor = clamp(cmd.rotorUs, 1000, 2000);
+    const uint16_t e1t   = clamp(cmd.esc1Us,  Calibration::ESC_STOP_US, Calibration::ESC_MAX_US);
+    const uint16_t e2t   = clamp(cmd.esc2Us,  Calibration::ESC_STOP_US, Calibration::ESC_MAX_US);
+
+    outEsc1Us_ = slew(outEsc1Us_, e1t, Calibration::ESC_SLEW_US);
+    outEsc2Us_ = slew(outEsc2Us_, e2t, Calibration::ESC_SLEW_US);
+
+    mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, sail);
+    mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_B, rotor);
+    mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_A, outEsc1Us_);
+    mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_B, outEsc2Us_);
+}

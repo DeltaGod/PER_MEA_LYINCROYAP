@@ -1,0 +1,1 @@
+/usr/bin/c++ -g CMakeFiles/test_runner.dir/test_runner.cpp.o "CMakeFiles/test_runner.dir/home/facundo/Proyectos/PER_Dron_a_voile/Informatica/Post-Claude/main/control/ManualController.cpp.o" "CMakeFiles/test_runner.dir/home/facundo/Proyectos/PER_Dron_a_voile/Informatica/Post-Claude/main/control/ModeManager.cpp.o" -o test_runner 
