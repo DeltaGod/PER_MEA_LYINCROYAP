@@ -36,7 +36,15 @@ void DroneApp::begin() {
     gps_.begin();
     Serial.println("[GPS]  OK  — waiting for fix (GPIO34 RX, GPIO12 TX, 9600 baud)");
 
-    // 3. MCPWM actuators: outputs begin at safe neutral positions
+    // 5. LoRa: SX1276 on SPI HSPI (SCK=5 MISO=19 MOSI=27 CS=18), DIO0=26, no RST
+    if (!loraRadio_.begin()) {
+        Serial.println("[LORA]  ERROR: init failed — check SPI wiring / AXP192 LDO2");
+    } else {
+        lora_.begin(loraRadio_, *this);
+        Serial.println("[LORA]  OK  — 433 MHz, TX heartbeat 1 Hz");
+    }
+
+    // 6. MCPWM actuators: outputs begin at safe neutral positions
     if (!actuators_.begin()) {
         Serial.println("[ACT]  ERROR: MCPWM init failed");
     } else {
@@ -50,7 +58,9 @@ void DroneApp::begin() {
 }
 
 void DroneApp::update() {
-    gps_.update();  // drain Serial1 on every iteration — must not be rate-limited
+    gps_.update();   // drain Serial1 every iteration — must not be rate-limited
+    lora_.update();  // poll LoRa for incoming commands — non-blocking
+
     const uint32_t now = millis();
 
     if (static_cast<uint32_t>(now - lastControlMs_) >= CONTROL_PERIOD_MS) {
@@ -61,6 +71,11 @@ void DroneApp::update() {
     if (static_cast<uint32_t>(now - lastBatMs_) >= BAT_PERIOD_MS) {
         lastBatVolts_ = battery_.readVolts();
         lastBatMs_    = now;
+    }
+
+    if (static_cast<uint32_t>(now - lastLoraMs_) >= LORA_PERIOD_MS) {
+        loraHbTick();
+        lastLoraMs_ = now;
     }
 
     if (static_cast<uint32_t>(now - lastDebugMs_) >= DEBUG_PERIOD_MS) {
@@ -118,6 +133,11 @@ void DroneApp::debugTick() {
             Serial.printf("       last: %s\n", gps_.lastLine());
     }
 
+    Serial.printf("[LORA] tx=%lu  rxRssi=%d%s\n",
+        (unsigned long)lora_.txCount(),
+        lora_.lastRxRssi(),
+        loraRadio_.ready() ? "" : "  [NOT INIT]");
+
     if (activeMode_ == ControlMode::Automatic) {
         static const char* stateNames[] = { "IDLE", "RUNNING", "RETURNING", "COMPLETE" };
         const char* modeName = (mission_.mode() == MissionMode::Circuit) ? "CIRCUIT" : "LINEAR ";
@@ -139,4 +159,16 @@ void DroneApp::debugTick() {
                 !gp.valid ? " (no GPS fix)" : "");
         }
     }
+}
+
+void DroneApp::loraHbTick() {
+    const GpsPosition& gp = gps_.position();
+    lora_.sendHeartbeat(
+        activeMode_,
+        mission_.state(),
+        gp.lat, gp.lon, gp.courseDeg,
+        lastBatVolts_,
+        mission_.currentIndex(),
+        mission_.waypointCount()
+    );
 }

@@ -3,6 +3,8 @@
 #include "../drivers/McpwmActuators.h"
 #include "../drivers/BatteryAdc.h"
 #include "../drivers/GpsUart.h"
+#include "../drivers/LoRaRadio.h"
+#include "../comm/LoRaComm.h"
 #include "../control/ModeManager.h"
 #include "../control/ManualController.h"
 #include "../navigation/MissionManager.h"
@@ -26,6 +28,8 @@ private:
     McpwmActuators   actuators_;
     BatteryAdc       battery_;
     GpsUart          gps_;
+    LoRaRadio        loraRadio_;
+    LoRaComm         lora_;
     ModeManager      modeManager_;
     ManualController manual_;
     MissionManager   mission_;
@@ -39,11 +43,14 @@ private:
     uint32_t        lastControlMs_    = 0;
     uint32_t        lastBatMs_        = 0;
     uint32_t        lastDebugMs_      = 0;
+    uint32_t        lastLoraMs_       = 0;
 
-    static constexpr uint32_t CONTROL_PERIOD_MS = 20;   // 50 Hz — matches servo PWM rate
-    static constexpr uint32_t BAT_PERIOD_MS     = 250;  // 4 Hz — battery voltage sample rate
-    static constexpr uint32_t DEBUG_PERIOD_MS   = 200;  // 5 Hz — readable on serial monitor
+    static constexpr uint32_t CONTROL_PERIOD_MS = 20;    // 50 Hz
+    static constexpr uint32_t BAT_PERIOD_MS     = 250;   // 4 Hz
+    static constexpr uint32_t DEBUG_PERIOD_MS   = 200;   // 5 Hz
+    static constexpr uint32_t LORA_PERIOD_MS    = 1000;  // 1 Hz heartbeat
 
     void controlTick(uint32_t nowMs);
     void debugTick();
+    void loraHbTick();
 };
