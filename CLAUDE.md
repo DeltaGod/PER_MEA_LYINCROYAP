@@ -202,60 +202,84 @@ Output: esc1Us, esc2Us (differential for steering)
 4. Check waypoint reached
 ```
 
-### 5.4 LoRa protocol (to define)
+### 5.4 LoRa protocol (IMPLEMENTED — Phase 3)
 
-Proposed format — simple semicolon-separated key=value (ASCII, no JSON overhead):
+JSON format matching the original `boat.ino` protocol for server compatibility.
+Parsed with `strstr()` on char buffers — no ArduinoJson dependency.
 
 **Heartbeat TX (drone → ground), every 1 s:**
+```json
+{"origin":"boat","type":"info","message":{"mode":"standby|route-ready|navigate",
+"location":[lat,lon],"servos":{"sail":0,"rudder":0},"control_mode":"radio|autonomous",
+"heading":0.0,"wind":0,"bat":0.00,"waypoints":{"total":0,"current":0}}}
 ```
-origin=drone;type=hb;mode=X;mission=X;bat=X.XX;lat=XX.XXXXXX;lon=XX.XXXXXX;wind=XXX;wpt=X/X;
+Mode mapping: Failsafe/Manual → `"standby"`, Auto+Idle/Complete → `"route-ready"`, Auto+Running/Returning → `"navigate"`.
+
+**Commands RX (ground → drone):**
+```json
+{"origin":"server","type":"command","message":{"navigate":true}}
+{"origin":"server","type":"command","message":{"stop":true}}
+{"origin":"server","type":"command","message":{"restart":true}}
+{"origin":"server","type":"command","message":{"wind-observation":true}}
+{"origin":"server","type":"command","message":{"wind-command":{"value":225}}}
+{"origin":"server","type":"command","message":{"home":{"lat":48.38,"lon":-4.49}}}
+{"origin":"server","type":"command","message":{"waypoints":{"number":2,"points":"lat1,lon1,lat2,lon2"}}}
 ```
 
-**Command RX (ground → drone):**
-```
-origin=gnd;cmd=load_waypoints;data=<lat,lon,lat,lon,...>;
-origin=gnd;cmd=start_mission;
-origin=gnd;cmd=stop_mission;
-origin=gnd;cmd=set_wind;value=XXX;
-origin=gnd;cmd=restart;
-```
+**Packet size limit**: SX1276 FIFO = 255 bytes. Heartbeat ≈ 210 bytes. Waypoint commands with many points approach the limit — roughly 8 waypoints at full precision.
 
-**Sensor data TX (when sample fits in LoRa packet ~250 bytes):**
-```
-origin=drone;type=sample;ts=XXXXX;sensor=NAME;data=<payload>;
-```
-
-Large samples → Storage (SPIFFS), retrieved later.
+**TX blocking note**: `LoRa.endPacket()` is synchronous. At SF7/BW125 kHz, a 210-byte packet takes ≈ 450 ms. This blocks the main loop once per second. Acceptable for Phase 3; switch to async before Phase 6 if control loop jitter becomes an issue.
 
 ---
 
 ## 6. Current Implementation Status
 
-### Post-Claude Phase 1 — Manual RC Control (COMPLETE — logic tested 106/106, awaiting bench test)
+### Post-Claude Phase 1 — Manual RC Control ✅ COMPLETE (106/106 tests pass)
 
 | Module | File | Status | Notes |
 |---|---|---|---|
-| `AxpPower` | `drivers/AxpPower.h/.cpp` | ✅ Coded | AXP192 init: LDO2/LDO3/DCDC1 enabled, Wire.end() releases GPIO21/22 |
-| `RcReceiver` | `drivers/RcReceiver.h/.cpp` | ✅ Coded | 5-ch interrupt PWM, ISR-safe portMUX, 100 ms timeout |
-| `McpwmActuators` | `drivers/McpwmActuators.h/.cpp` | ✅ Coded | MCPWM Timers 0+1, slew limiting, safe initial positions |
-| `ModeManager` | `control/ModeManager.h/.cpp` | ✅ Coded | CH5 → Failsafe/ManualServo/ManualProp/Automatic |
-| `ManualController` | `control/ManualController.h/.cpp` | ✅ Coded | Binary sail, winch pass-through, ESC arming + differential |
-| `DroneApp` | `app/DroneApp.h/.cpp` | ✅ Coded | 20 ms control tick, 200 ms debug serial, arming indicator |
-| `Types` | `core/Types.h` | ✅ Coded | ControlMode enum, RcFrame, ActuatorCommand structs |
-| `BoardConfig` | `config/BoardConfig.h` | ✅ Coded | All pin assignments and RC thresholds |
-| `Calibration` | `config/Calibration.h` | ✅ Coded | Servo/ESC µs values (sail positions need bench calibration) |
-| `main.ino` | `main/main.ino` | ✅ Coded | Instantiates DroneApp, calls begin()/update() |
+| `AxpPower` | `drivers/AxpPower.h/.cpp` | ✅ | AXP192 init: LDO2/LDO3/DCDC1 enabled, Wire.end() releases GPIO21/22 |
+| `RcReceiver` | `drivers/RcReceiver.h/.cpp` | ✅ | 5-ch interrupt PWM, ISR-safe portMUX, 100 ms timeout |
+| `McpwmActuators` | `drivers/McpwmActuators.h/.cpp` | ✅ | MCPWM Timers 0+1, slew limiting, safe initial positions |
+| `ModeManager` | `control/ModeManager.h/.cpp` | ✅ | CH5 → Failsafe/ManualServo/ManualProp/Automatic |
+| `ManualController` | `control/ManualController.h/.cpp` | ✅ | Binary sail, winch pass-through, ESC arming + differential |
+| `DroneApp` | `app/DroneApp.h/.cpp` | ✅ | 20 ms control tick, 200 ms debug serial, arming indicator |
+| `Types` | `core/Types.h` | ✅ | ControlMode enum, RcFrame, ActuatorCommand structs |
+| `BoardConfig` | `config/BoardConfig.h` | ✅ | All pin assignments and RC thresholds |
+| `Calibration` | `config/Calibration.h` | ✅ | Servo/ESC µs values (sail positions need bench calibration) |
+| `main.ino` | `main/main.ino` | ✅ | Instantiates DroneApp, calls begin()/update() |
+
+### Post-Claude Phase 2 — GPS + Navigation ✅ COMPLETE (hardware tested outdoors)
+
+| Module | File | Status | Notes |
+|---|---|---|---|
+| `GpsUart` | `drivers/GpsUart.h/.cpp` | ✅ | Serial1 GPIO34/12, TinyGPSPlus, two-buffer NMEA capture, satsInView() |
+| `Navigator` | `navigation/Navigator.h/.cpp` | ✅ | Haversine distanceM() + bearingDeg(), namespace (no state) |
+| `MissionPlan` | `navigation/MissionPlan.h` | ✅ | Up to 16 Waypoints, MissionMode (Linear/Circuit) |
+| `MissionManager` | `navigation/MissionManager.h/.cpp` | ✅ | State machine Idle→Running→Returning→Complete, emergencyReturn() |
+| `Types` | `core/Types.h` | ✅ | Added GpsPosition, Waypoint, MissionMode, MissionState |
+
+GPS hardware notes: board requires LiPo battery for warm starts (without battery every power cycle = cold start, ~2 min for fix). LED on NEO-6M TIMEPULSE pin: off = no fix, 1 Hz blink = fix acquired.
+
+### Post-Claude Phase 3 — LoRa ✅ COMPLETE (hardware tested — TX verified, RX functional)
+
+| Module | File | Status | Notes |
+|---|---|---|---|
+| `LoRaRadio` | `drivers/LoRaRadio.h/.cpp` | ✅ | SPI HSPI, 433 MHz, RST=-1 (GPIO23 shared with RC CH6), blocking TX |
+| `LoRaComm` | `comm/LoRaComm.h/.cpp` | ✅ | JSON heartbeat TX 1 Hz, command dispatch (navigate/stop/home/waypoints/wind/restart) |
+| `DroneApp` | `app/DroneApp.h/.cpp` | ✅ | loraHbTick() at 1 s, lora_.update() every loop, [LORA] debug line |
+| Transceiver | `transceiver/transceiver.ino` | ✅ | Ground station sketch — shorthand commands + raw JSON passthrough, tested on T-Beam |
 
 ### Post_GPT (reference only — do not modify)
 
 | Module | Status |
 |---|---|
 | `RcReceiver`, `McpwmActuators`, `ModeManager`, `ManualController` | ✅ Working — adopted as reference |
-| `Navigator`, `MissionPlan`, `MissionManager` | ✅ Working — will be ported in later phases |
-| `GpsUart`, `LoRaRadio`, `Storage`, `SensorBus`, `WindEstimator`, `SailAutoMode` | ⚠️ Placeholders — to be implemented in Post-Claude |
+| `Navigator`, `MissionPlan`, `MissionManager` | ✅ Working — ported to Post-Claude Phase 2 |
+| `Storage`, `SensorBus`, `WindEstimator`, `SailAutoMode` | ⚠️ Placeholders — to be implemented in Post-Claude |
 
-### Phases not yet started (Post-Claude)
-GPS, LoRa, Sensors, Wind Estimator, Autonomous sailing — see Section 7 for order.
+### Phases not yet started
+Sensors (Phase 4), Wind Estimator (Phase 5), Autonomous Sailing (Phase 6), Full Mission (Phase 7).
 
 ---
 
@@ -266,16 +290,18 @@ GPS, LoRa, Sensors, Wind Estimator, Autonomous sailing — see Section 7 for ord
 - ManualController: binary sail + ESC arming + differential thrust
 - **Next action: bench test (see Section 14)**
 
-### Phase 2 — GPS integration (blocked until Phase 1 validated)
-- Wire TinyGPSPlus into `GpsUart.cpp`
-- Validate: fix acquisition, lat/lon, speed, heading output
-- `PositionService` to detect GPS stale and hold last known position
+### Phase 2 — GPS integration ✅ COMPLETE
+- GpsUart driver (TinyGPSPlus), position/speed/heading/sats/hdop displayed on serial
+- Navigator (haversine), MissionPlan, MissionManager state machine
+- Hardware tested: GPS receives NMEA (cold start without LiPo — fix after ~2 min outdoors)
+- **Remaining hardware action**: install LiPo battery for warm start
 
-### Phase 3 — LoRa integration (after GPS)
-- Wire LoRa library into `LoRaRadio.cpp`
-- Resolve GPIO23 conflict first (see Section 15)
-- Implement TX heartbeat + RX command parsing
-- Test with second T-Beam or PC + LoRa USB dongle as ground station
+### Phase 3 — LoRa integration ✅ COMPLETE
+- LoRaRadio driver: SPI HSPI, 433 MHz, RST skipped (GPIO23/CH6 conflict)
+- LoRaComm: JSON heartbeat TX at 1 Hz, full command dispatcher
+- Transceiver ground station sketch: shorthand CLI + raw JSON passthrough
+- Hardware tested: TX verified (tx counter increments), transceiver boots and listens
+- **Remaining**: two-device end-to-end test (drone TX → transceiver RX → command response)
 
 ### Phase 4 — Sensors (I2C)
 - Identify which sensors are used and their I2C addresses
@@ -305,7 +331,7 @@ GPS, LoRa, Sensors, Wind Estimator, Autonomous sailing — see Section 7 for ord
 
 1. **Sensors**: What specific sensors are used? (temperature, salinity, turbidity, pH, current…) What are their I2C addresses? Which alternate I2C pins are available on the PCB?
 2. **Storage**: Is there an SD card slot on the PCB V2? Or use SPIFFS only?
-3. **Ground station**: What is receiving LoRa? Another T-Beam? A computer via USB? Is there a software interface?
+3. **Ground station**: ✅ Resolved — second T-Beam running `transceiver/transceiver.ino` (Post-Claude). Bridges USB serial ↔ LoRa. Shorthand commands: navigate, stop, restart, wind-obs, wind \<deg\>, home \<lat,lon\>, wpt \<lat,lon,...\>.
 4. **Compass/IMU**: Is there an IMU or magnetometer? Crucial when stationary or in currents for heading without GPS motion. Not mentioned in any file so far.
 5. **Single vs dual propeller**: ESC1 (GPIO32) and ESC2 (GPIO33) are wired on the PCB. Is the hardware definitely dual-prop?
 6. **LoRa band**: 433 MHz confirmed in both versions. Regional regulations (Europe/Argentina)?
@@ -332,10 +358,17 @@ GPS, LoRa, Sensors, Wind Estimator, Autonomous sailing — see Section 7 for ord
 | `main/drivers/McpwmActuators.h/.cpp` | MCPWM output for sail servo, rotor winch, ESC1, ESC2 with slew limiting |
 | `main/control/ModeManager.h/.cpp` | Decodes CH5 → ControlMode (Failsafe / ManualServo / ManualProp) |
 | `main/control/ManualController.h/.cpp` | RC → ActuatorCommand: binary sail, winch pass-through, ESC differential + arming |
-| `main/app/DroneApp.h/.cpp` | Orchestrator: 20 ms control tick, 200 ms debug serial print |
+| `main/app/DroneApp.h/.cpp` | Orchestrator: 20/200/1000 ms ticks (control/debug/LoRa heartbeat) |
+| `main/drivers/GpsUart.h/.cpp` | Serial1 TinyGPSPlus wrapper — position, sats-in-view, last NMEA line |
+| `main/drivers/LoRaRadio.h/.cpp` | SX1276 driver — SPI HSPI 433 MHz, blocking TX, polling RX |
+| `main/comm/LoRaComm.h/.cpp` | LoRa protocol — JSON heartbeat builder + command dispatcher |
+| `main/navigation/Navigator.h/.cpp` | Haversine distance + bearing (stateless namespace) |
+| `main/navigation/MissionPlan.h` | Up to 16 Waypoints + MissionMode |
+| `main/navigation/MissionManager.h/.cpp` | Mission state machine (Idle/Running/Returning/Complete) |
+| `transceiver/transceiver.ino` | Ground station sketch — shorthand CLI + raw JSON ↔ LoRa bridge |
 | `test/CMakeLists.txt` | Native Linux build for logic unit tests (no hardware needed) |
 | `test/stubs/Arduino.h` | Minimal Arduino type stub (uint8_t etc.) for host compilation |
-| `test/test_runner.cpp` | 59 test cases: ModeManager, ManualController servo/prop/arming/failsafe |
+| `test/test_runner.cpp` | 106 test cases: ModeManager, ManualController servo/prop/arming/failsafe |
 
 ### Note on Arduino IDE folder structure
 The Arduino IDE only compiles `.cpp` files that are in the same folder as the `.ino` OR inside a `src/` subdirectory. All source subdirectories live under `main/src/`. All `#include` statements within `src/` use relative paths (`../sibling/` or `./samedir`) — the IDE does **not** add `src/` subdirectories to the include search path automatically.
@@ -459,7 +492,7 @@ The Arduino IDE only compiles `.cpp` files that are in the same folder as the `.
 
 **⚠️ CRITICAL: GPS does not work until AXP192 LDO3 is set to 3300 mV and enabled.** This must be done in code before initializing Serial1 for GPS.
 
-**⚠️ CRITICAL: LoRa RST pin discrepancy.** Post_GPT `BoardConfig.h` uses `GPIO14` for `LORA_RST_PIN`, but the T-Beam V1.1 actual hardware connects LoRa RST to `GPIO23`. This needs hardware verification before the LoRa driver is implemented. If the PCB ties a different pin to a LoRa RST line via the header, the PCB schematic takes precedence.
+**LoRa RST pin:** Post_GPT used GPIO14, T-Beam V1.1 hardware uses GPIO23, but GPIO23 conflicts with RC CH6 on the PCB. Resolution: LoRaRadio driver passes RST=-1 (no hardware reset). SX1276 initializes reliably without it — confirmed working in Phase 3.
 
 ---
 
@@ -476,6 +509,11 @@ The Arduino IDE only compiles `.cpp` files that are in the same folder as the `.
 | 2026-04-27 | Native unit test harness built and run (test/): 59 tests, 1 bug found and fixed. Bug: ManualController::update() did not call disarm() when entering ManualServo mode, allowing the ESC to stay armed across a mode switch — pilot could switch back to ManualProp and drive motors without re-arming. Fix: added disarm() call in the ManualServo branch of update(). All 59 tests now pass. |
 | 2026-04-28 | Edge-case test round (47 new tests, 106 total): all pass. Key findings: (1) sail/rotor deadband inclusive boundaries confirmed correct; (2) uint32_t arming timer overflow at ~49 days handled correctly by unsigned arithmetic; (3) armStartMs_=0 sentinel defers countdown by one tick when nowMs=0 at boot — harmless in practice since millis()>100ms before first control tick; (4) re-arm after mode switch confirmed to require full 2s hold; (5) differential left/right steer is perfectly symmetric. No new bugs found. |
 | 2026-04-28 | Arduino IDE compile fix: all source subdirectories moved into `main/src/` so the Arduino IDE build system picks them up. All `#include` paths updated to use relative paths (`../`) since the IDE only adds the sketch directory to the include search path, not `src/` subdirectories. Confirmed clean compile via arduino-cli: 320 KB flash (24%), 24 KB RAM (7%). |
+| 2026-04-28 | Phase 2 — GPS: GpsUart driver (TinyGPSPlus), GpsPosition struct, Navigator (haversine), MissionPlan, MissionManager state machine. DroneApp updated with gps_.update() every loop, mission integration in controlTick(), GPS + mission debug lines. |
+| 2026-04-28 | GPS hardware diagnostic: confirmed no fix indoors (expected). Outdoors, 9 satellites in view but ephemeris download in progress (cold start without LiPo). Root cause: without battery, every USB power cycle loses GPS almanac. Fix: install LiPo battery. Added TinyGPSCustom gsvTotal_ for satsInView(), two-buffer NMEA line capture (lineBuf_ + completedLine_ with memcpy), visible= counter in NO FIX debug line. |
+| 2026-05-04 | Phase 3 — LoRa: LoRaRadio driver (SPI HSPI, 433 MHz, RST=-1), LoRaComm protocol layer (JSON heartbeat TX 1 Hz, command dispatcher: navigate/stop/home/waypoints/wind-command/wind-observation/restart). DroneApp updated with loraHbTick() at 1 s, [LORA] debug line. Serial monitoring via pyserial venv: confirmed [LORA] OK at boot and tx counter incrementing at 1 Hz. Blocking TX ≈450 ms per packet noted — acceptable for Phase 3. |
+| 2026-05-04 | Phase 3 — Transceiver: created `transceiver/transceiver.ino` ground station sketch. Shorthand CLI commands (navigate, stop, restart, wind-obs, wind \<deg\>, home \<lat,lon\>, wpt \<lat,lon,...\>) + raw JSON passthrough. Compiled and hardware-tested on T-Beam: [LORA] OK, 433 MHz, listening. Both sketches now at 359 KB / 302 KB flash respectively. |
+| 2026-05-05 | Phase 3 — Full uplink verified: added DEBUG_MODE flag (`DebugConfig.h`), debug prints in `LoRaRadio::poll()` and `LoRaComm::dispatch()`, `rxDetected_` counter. Created `lora_uplink_test.py` (5-burst per command strategy). All 7 commands pass: navigate ✓ stop ✓ home ✓ waypoints ✓ wind-command ✓ wind-obs ✓ restart ✓. RSSI −101 to −106 dBm at 5 cm range. Timing collision explained and mitigated by burst strategy. Phase 3 COMPLETE. |
 
 ---
 
@@ -518,8 +556,7 @@ Before water testing, verify each subsystem in order:
 ### GPIO23 — LoRa RST vs RC CH6
 - T-Beam V1.1 hardware routes LoRa SX1276 RESET to **GPIO23**
 - PCB V2 also routes **RC CH6** to GPIO23
-- **Current status:** Acceptable for Phase 1 — CH6 is unused and LoRa is not yet initialized. The RC interrupt for CH6 is attached but the LoRa reset line is not driven.
-- **Resolution needed before Phase 3 (LoRa):** Verify PCB schematic. Options: (a) do not use CH6, only control LoRa RST programmatically as an output; (b) reroute CH6 to a free GPIO via PCB rework; (c) confirm that T-Beam LoRa RST is actually on a different pin in the PCB routing.
+- **Resolution (Phase 3):** LoRa driver uses RST=-1 (skip hardware reset). The SX1276 initializes reliably without it. RC CH6 ISR remains attached but CH6 is unused in any logic. No conflict in practice.
 
 ### ESC LiPo cell count (EPRG-3 card required)
 - Pro-Tronik Black Fet ESCs cannot have cell count programmed from the transmitter
@@ -543,7 +580,7 @@ Before water testing, verify each subsystem in order:
 - T-Beam V1.1: GPIO32 = LoRa DIO1, GPIO33 = LoRa DIO2
 - PCB V2: GPIO32 = ESC1 PWM, GPIO33 = ESC2 PWM
 - **Acceptable for Phase 1–2:** LoRa is not initialized; DIO1/DIO2 are only needed for certain LoRa modes (not mandatory for basic TX/RX)
-- **Must verify in Phase 3:** whether RFM95/SX1276 library requires DIO1/DIO2 for the TX/RX done interrupt path used by the project
+- **Phase 3 result:** DIO1/DIO2 are NOT needed — the LoRa library uses only DIO0 (GPIO26) for interrupt-driven mode, and Phase 3 uses polling (`parsePacket()`) which doesn't require any DIO pin. No conflict.
 
 ---
 
@@ -562,7 +599,8 @@ Before water testing, verify each subsystem in order:
   ```
   ~/bin/arduino-cli compile --fqbn esp32:esp32:t-beam /home/facundo/Proyectos/PER_Dron_a_voile/Informatica/Post-Claude/main
   ```
-- Last successful compile: **320 KB flash (24%), 24 KB RAM (7%)**
+- Last successful compile (drone main): **359 KB flash (27%), 25 KB RAM (7%)**
+- Last successful compile (transceiver): **302 KB flash (23%), 21 KB RAM (6%)**
 
 ---
 

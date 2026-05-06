@@ -2,13 +2,16 @@
 #include "../drivers/LoRaRadio.h"
 #include "../app/DroneApp.h"
 #include "../navigation/MissionPlan.h"
+#include "../config/DebugConfig.h"
 
 void LoRaComm::begin(LoRaRadio& radio, DroneApp& app) {
     radio_ = &radio;
     app_   = &app;
+    DBG("Comm", "begin OK");
 }
 
 void LoRaComm::update() {
+    if (!radio_) return;
     if (!radio_->poll(rxBuf_, sizeof(rxBuf_))) return;
     lastRxRssi_ = radio_->rssi();
     Serial.printf("[LORA] RX rssi=%d  %s\n", lastRxRssi_, rxBuf_);
@@ -45,16 +48,29 @@ void LoRaComm::sendHeartbeat(ControlMode mode, MissionState mState,
         modeStr, lat, lon, ctrlMode, heading, batVolts,
         (unsigned)wptTotal, (unsigned)wptCur);
 
+    if (!radio_) return;
     if (radio_->send(buf)) {
         txCount_++;
+        DBG("Comm", "HB TX #%lu mode=%s bat=%.2fV loc=(%.4f,%.4f)",
+            (unsigned long)txCount_, modeStr, batVolts, lat, lon);
     }
 }
 
 void LoRaComm::dispatch(const char* json) {
-    if (!strstr(json, "\"origin\":\"server\"")) return;
-    if (!strstr(json, "\"type\":\"command\"")) return;
+    DBG("Comm", "dispatch: %.120s", json);
+    if (!strstr(json, "\"origin\":\"server\"")) {
+        DBG("Comm", "REJECTED: no origin:server");
+        return;
+    }
+    if (!strstr(json, "\"type\":\"command\"")) {
+        DBG("Comm", "REJECTED: no type:command");
+        return;
+    }
     const char* msg = strstr(json, "\"message\":");
-    if (!msg) return;
+    if (!msg) {
+        DBG("Comm", "REJECTED: no message field");
+        return;
+    }
 
     if (strstr(msg, "\"waypoints\"")) {
         handleWaypoints(msg);

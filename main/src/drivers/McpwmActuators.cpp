@@ -1,14 +1,18 @@
 #include "McpwmActuators.h"
 #include "../config/BoardConfig.h"
 #include "../config/Calibration.h"
+#include "../config/DebugConfig.h"
 #include "driver/mcpwm.h"
 
 bool McpwmActuators::begin() {
     bool ok = true;
-    ok &= (mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM0A, BoardConfig::SAIL_SERVO_PIN)  == ESP_OK);
-    ok &= (mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM0B, BoardConfig::ROTOR_SERVO_PIN) == ESP_OK);
-    ok &= (mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM1A, BoardConfig::ESC1_PIN)        == ESP_OK);
-    ok &= (mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM1B, BoardConfig::ESC2_PIN)        == ESP_OK);
+    bool g0 = (mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM0A, BoardConfig::SAIL_SERVO_PIN)  == ESP_OK);
+    bool g1 = (mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM0B, BoardConfig::ROTOR_SERVO_PIN) == ESP_OK);
+    bool g2 = (mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM1A, BoardConfig::ESC1_PIN)        == ESP_OK);
+    bool g3 = (mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM1B, BoardConfig::ESC2_PIN)        == ESP_OK);
+    ok = g0 && g1 && g2 && g3;
+    DBG("ACT", "GPIO init: sail=%s rotor=%s esc1=%s esc2=%s",
+        g0?"OK":"FAIL", g1?"OK":"FAIL", g2?"OK":"FAIL", g3?"OK":"FAIL");
 
     mcpwm_config_t cfg   = {};
     cfg.frequency        = Calibration::PWM_FREQ_HZ;
@@ -17,14 +21,21 @@ bool McpwmActuators::begin() {
     cfg.counter_mode     = MCPWM_UP_COUNTER;
     cfg.duty_mode        = MCPWM_DUTY_MODE_0;
 
-    ok &= (mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_0, &cfg) == ESP_OK);
-    ok &= (mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_1, &cfg) == ESP_OK);
+    bool t0 = (mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_0, &cfg) == ESP_OK);
+    bool t1 = (mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_1, &cfg) == ESP_OK);
+    ok &= t0 && t1;
+    DBG("ACT", "timer init: T0=%s T1=%s  freq=%uHz",
+        t0?"OK":"FAIL", t1?"OK":"FAIL", (unsigned)Calibration::PWM_FREQ_HZ);
 
     // Output safe starting positions immediately
     mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, Calibration::SAIL_CENTER_US);
     mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_B, Calibration::ROTOR_STOP_US);
     mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_A, Calibration::ESC_STOP_US);
     mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_B, Calibration::ESC_STOP_US);
+    DBG("ACT", "safe positions: sail=%u rotor=%u esc=%u",
+        (unsigned)Calibration::SAIL_CENTER_US,
+        (unsigned)Calibration::ROTOR_STOP_US,
+        (unsigned)Calibration::ESC_STOP_US);
 
     initialized_ = ok;
     return ok;
@@ -57,6 +68,16 @@ void McpwmActuators::write(const ActuatorCommand& cmd) {
 
     outEsc1Us_ = slew(outEsc1Us_, e1t, Calibration::ESC_SLEW_US);
     outEsc2Us_ = slew(outEsc2Us_, e2t, Calibration::ESC_SLEW_US);
+
+    // Log sail / rotor changes (skip ESC — slew changes every tick and debugTick already covers them)
+    if (sail != prevSailUs_) {
+        DBG("ACT", "sail  %u → %u µs", (unsigned)prevSailUs_, (unsigned)sail);
+        prevSailUs_ = sail;
+    }
+    if (rotor != prevRotorUs_) {
+        DBG("ACT", "rotor %u → %u µs", (unsigned)prevRotorUs_, (unsigned)rotor);
+        prevRotorUs_ = rotor;
+    }
 
     mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, sail);
     mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_B, rotor);

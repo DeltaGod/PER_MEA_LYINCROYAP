@@ -25,4 +25,5 @@ private:
     char          lineBuf_[96]       = {};
     char          completedLine_[96] = {};
     uint8_t       lineLen_           = 0;
+    bool          prevValid_         = false;  // tracks fix state for change detection
 };

@@ -1,6 +1,7 @@
 #include "DroneApp.h"
 #include "../drivers/AxpPower.h"
 #include "../navigation/Navigator.h"
+#include "../config/DebugConfig.h"
 
 static const char* modeName(ControlMode m) {
     switch (m) {
@@ -16,6 +17,7 @@ void DroneApp::begin() {
     Serial.begin(115200);
     delay(200);
     Serial.println("\n=== SeaDrone boot ===");
+    DBG("APP", "boot start");
 
     // 1. AXP192: enable power rails, then release I2C pins for RC use
     if (!AxpPower::begin()) {
@@ -55,6 +57,7 @@ void DroneApp::begin() {
 
     Serial.println("=== Ready ===");
     Serial.println("Format: [MODE] CH2=#### CH3=#### CH4=#### CH5=#### | sail=#### rotor=#### esc1=#### esc2=####");
+    DBG("APP", "boot complete");
 }
 
 void DroneApp::update() {
@@ -87,6 +90,13 @@ void DroneApp::update() {
 void DroneApp::controlTick(uint32_t nowMs) {
     lastFrame_  = rc_.readFrame();
     activeMode_ = modeManager_.decode(lastFrame_);
+
+    // Log mode transitions
+    if (activeMode_ != prevMode_) {
+        DBG("APP", "mode: %s → %s  (CH5=%u)",
+            modeName(prevMode_), modeName(activeMode_), (unsigned)lastFrame_.ch5);
+        prevMode_ = activeMode_;
+    }
 
     if (activeMode_ == ControlMode::ManualServo ||
         activeMode_ == ControlMode::ManualProp) {
@@ -133,27 +143,28 @@ void DroneApp::debugTick() {
             Serial.printf("       last: %s\n", gps_.lastLine());
     }
 
-    Serial.printf("[LORA] tx=%lu  rxRssi=%d%s\n",
+    Serial.printf("[LORA] tx=%lu  rxDet=%lu  rxRssi=%d%s\n",
         (unsigned long)lora_.txCount(),
+        (unsigned long)loraRadio_.rxDetectedCount(),
         lora_.lastRxRssi(),
         loraRadio_.ready() ? "" : "  [NOT INIT]");
 
     if (activeMode_ == ControlMode::Automatic) {
         static const char* stateNames[] = { "IDLE", "RUNNING", "RETURNING", "COMPLETE" };
-        const char* modeName = (mission_.mode() == MissionMode::Circuit) ? "CIRCUIT" : "LINEAR ";
+        const char* mName = (mission_.mode() == MissionMode::Circuit) ? "CIRCUIT" : "LINEAR ";
         const uint8_t s = static_cast<uint8_t>(mission_.state());
 
         if (lastTargetActive_ && gp.valid) {
             const float dist    = Navigator::distanceM(gp.lat, gp.lon, lastTarget_.lat, lastTarget_.lon);
             const float bearing = Navigator::bearingDeg(gp.lat, gp.lon, lastTarget_.lat, lastTarget_.lon);
             Serial.printf("[MISN ] %s %s wp=%u/%u target=(%.6f,%.6f r=%.0fm) dist=%.0fm brg=%.0f°\n",
-                stateNames[s], modeName,
+                stateNames[s], mName,
                 (unsigned)mission_.currentIndex() + 1, (unsigned)mission_.waypointCount(),
                 lastTarget_.lat, lastTarget_.lon, lastTarget_.radiusM,
                 dist, bearing);
         } else {
             Serial.printf("[MISN ] %s %s wp=%u/%u home=%s%s\n",
-                stateNames[s], modeName,
+                stateNames[s], mName,
                 (unsigned)mission_.currentIndex() + 1, (unsigned)mission_.waypointCount(),
                 mission_.hasHome() ? "SET" : "NOT SET",
                 !gp.valid ? " (no GPS fix)" : "");

@@ -1,5 +1,6 @@
 #include "RcReceiver.h"
 #include "../config/BoardConfig.h"
+#include "../config/DebugConfig.h"
 #include "driver/gpio.h"
 
 RcReceiver* RcReceiver::instance_ = nullptr;
@@ -23,19 +24,22 @@ void RcReceiver::begin() {
     attachInterrupt(digitalPinToInterrupt(BoardConfig::RX_CH4_PIN), isrCH4, CHANGE);
     attachInterrupt(digitalPinToInterrupt(BoardConfig::RX_CH5_PIN), isrCH5, CHANGE);
     attachInterrupt(digitalPinToInterrupt(BoardConfig::RX_CH6_PIN), isrCH6, CHANGE);
+    DBG("RC", "ISRs attached: CH2=GPIO%d CH3=GPIO%d CH4=GPIO%d CH5=GPIO%d CH6=GPIO%d",
+        BoardConfig::RX_CH2_PIN, BoardConfig::RX_CH3_PIN, BoardConfig::RX_CH4_PIN,
+        BoardConfig::RX_CH5_PIN, BoardConfig::RX_CH6_PIN);
 }
 
+// NOTE: Serial must NOT be called from ISR context.
+// handleEdge / isrCHx run in IRAM — no DBG here.
 void IRAM_ATTR RcReceiver::handleEdge(uint8_t pin, Ch ch) {
     const uint32_t now = micros();
     const int      idx = static_cast<int>(ch);
 
     if (gpio_get_level(static_cast<gpio_num_t>(pin))) {
-        // Rising edge — record start time
         portENTER_CRITICAL_ISR(&mux_);
         riseUs_[idx] = now;
         portEXIT_CRITICAL_ISR(&mux_);
     } else {
-        // Falling edge — compute pulse width and validate
         uint32_t rise;
         portENTER_CRITICAL_ISR(&mux_);
         rise = riseUs_[idx];
