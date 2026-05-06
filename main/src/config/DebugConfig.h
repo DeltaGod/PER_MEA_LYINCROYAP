@@ -2,7 +2,7 @@
 
 // Set DEBUG_MODE 1 for verbose event logging on Serial.
 // Set to 0 before water deployment — saves ~400 bytes RAM and removes serial latency.
-#define DEBUG_MODE 1
+#define DEBUG_MODE 0
 
 #if DEBUG_MODE
 // DBG("TAG", "fmt", args...)  →  [DBG:TAG] fmt\n

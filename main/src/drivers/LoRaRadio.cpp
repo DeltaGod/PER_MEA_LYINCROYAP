@@ -42,8 +42,7 @@ bool LoRaRadio::send(const char* msg) {
     }
     DBG("Radio", "TX %u bytes", (unsigned)strlen(msg));
     LoRa.print(msg);
-    // DIAGNOSTIC TEST: blocking TX (original approach that worked in Phase 3)
-    LoRa.endPacket(false);
+    LoRa.endPacket(true);  // async — returns immediately, radio transmits in background
     return true;
 }
 
