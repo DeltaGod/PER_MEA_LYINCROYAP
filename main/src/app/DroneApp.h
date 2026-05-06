@@ -41,6 +41,7 @@ private:
     ControlMode     activeMode_       = ControlMode::Failsafe;
     ControlMode     prevMode_         = ControlMode::Failsafe;
     float           lastBatVolts_     = 0.0f;
+    uint32_t        lastGpsChars_     = 0;
     uint32_t        lastControlMs_    = 0;
     uint32_t        lastBatMs_        = 0;
     uint32_t        lastDebugMs_      = 0;
