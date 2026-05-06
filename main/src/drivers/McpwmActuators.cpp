@@ -14,24 +14,34 @@ bool McpwmActuators::begin() {
     DBG("ACT", "GPIO init: sail=%s rotor=%s esc1=%s esc2=%s",
         g0?"OK":"FAIL", g1?"OK":"FAIL", g2?"OK":"FAIL", g3?"OK":"FAIL");
 
-    mcpwm_config_t cfg   = {};
-    cfg.frequency        = Calibration::PWM_FREQ_HZ;
-    cfg.cmpr_a           = 0.0f;
-    cfg.cmpr_b           = 0.0f;
-    cfg.counter_mode     = MCPWM_UP_COUNTER;
-    cfg.duty_mode        = MCPWM_DUTY_MODE_0;
+mcpwm_config_t cfg = {};
+cfg.frequency = Calibration::PWM_FREQ_HZ;
+cfg.cmpr_a = 0.0f;
+cfg.cmpr_b = 0.0f;
+cfg.counter_mode = MCPWM_UP_COUNTER;
+cfg.duty_mode = MCPWM_DUTY_MODE_0;
 
-    bool t0 = (mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_0, &cfg) == ESP_OK);
-    bool t1 = (mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_1, &cfg) == ESP_OK);
-    ok &= t0 && t1;
-    DBG("ACT", "timer init: T0=%s T1=%s  freq=%uHz",
-        t0?"OK":"FAIL", t1?"OK":"FAIL", (unsigned)Calibration::PWM_FREQ_HZ);
+bool t0 = (mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_0, &cfg) == ESP_OK);
+bool t1 = (mcpwm_init(MCPWM_UNIT_0, MCPWM_TIMER_1, &cfg) == ESP_OK);
+ok &= t0 && t1;
 
-    // Output safe starting positions immediately
-    mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, Calibration::SAIL_CENTER_US);
-    mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_B, Calibration::ROTOR_STOP_US);
-    mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_A, Calibration::ESC_STOP_US);
-    mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_B, Calibration::ESC_STOP_US);
+DBG("ACT", "timer init: T0=%s T1=%s freq=%uHz",
+    t0?"OK":"FAIL", t1?"OK":"FAIL", (unsigned)Calibration::PWM_FREQ_HZ);
+
+// PWM2 / Safran / GPIO25 passes through an NPN level shifter.
+// A common-emitter NPN inverts the signal, so MCPWM0B must output
+// an active-low pulse. After the NPN, the REGATTA ECO II receives
+// the normal active-high RC servo pulse.
+mcpwm_set_duty_type(MCPWM_UNIT_0,
+                    MCPWM_TIMER_0,
+                    MCPWM_OPR_B,
+                    MCPWM_DUTY_MODE_1);
+
+// Output safe starting positions immediately
+mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, Calibration::SAIL_CENTER_US);
+mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_B, Calibration::ROTOR_STOP_US);
+mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_A, Calibration::ESC_STOP_US);
+mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_1, MCPWM_OPR_B, Calibration::ESC_STOP_US);
     DBG("ACT", "safe positions: sail=%u rotor=%u esc=%u",
         (unsigned)Calibration::SAIL_CENTER_US,
         (unsigned)Calibration::ROTOR_STOP_US,
