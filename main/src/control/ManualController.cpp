@@ -64,14 +64,23 @@ ActuatorCommand ManualController::computeServoMode(const RcFrame& frame) {
 
     cmd.sailUs = (sailState_ > 0) ? Calibration::SAIL_PLUS_US : Calibration::SAIL_MINUS_US;
 
-    // --- Rotor: direct CH4 pass-through with center deadband ---
-    const uint16_t ch4 = frame.ch4;
-    if (ch4 >= static_cast<uint16_t>(Calibration::ROTOR_STOP_US - db) &&
-        ch4 <= static_cast<uint16_t>(Calibration::ROTOR_STOP_US + db)) {
-        cmd.rotorUs = Calibration::ROTOR_STOP_US;
-    } else {
-        cmd.rotorUs = clamp(ch4, Calibration::ROTOR_MIN_US, Calibration::ROTOR_MAX_US);
-    }
+// --- Safran / REGATTA ECO II: CH4 controls target position ---
+// This winch is positional multi-turn: PWM is a target position, not speed.
+// CH4 low    -> one end of calibrated travel
+// CH4 center -> mechanical center
+// CH4 high   -> other end of calibrated travel
+const uint16_t ch4 = frame.ch4;
+
+if (ch4 >= static_cast<uint16_t>(BoardConfig::RC_MID_US - db) &&
+    ch4 <= static_cast<uint16_t>(BoardConfig::RC_MID_US + db)) {
+  cmd.rotorUs = Calibration::ROTOR_CENTER_US;
+} else {
+  cmd.rotorUs = mapUs(ch4,
+                      BoardConfig::RC_MIN_US,
+                      BoardConfig::RC_MAX_US,
+                      Calibration::ROTOR_MIN_US,
+                      Calibration::ROTOR_MAX_US);
+}
 
     return cmd;
 }
