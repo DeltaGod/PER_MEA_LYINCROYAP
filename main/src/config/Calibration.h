@@ -13,21 +13,16 @@ static constexpr uint16_t SAIL_CENTER_US = 1520;
 static constexpr uint16_t SAIL_PLUS_US   = 1575;  // +10° (aileron deflection, one tack)
 static constexpr uint16_t SAIL_MINUS_US  = 1465;  // -10° (aileron deflection, other tack)
 
-// Graupner REGATTA ECO II 5176 — sail winch / Safran linkage
-// This is a positional multi-turn winch servo, not a continuous-speed servo.
-// PWM sets target position.
-// 1500 µs = approximate mechanical center.
-// 1000–2000 µs = calibrated target position range.
-// Manual: 6 turns total travel.
+// Graupner REGATTA ECO II 5176 — winch servo on Safran linkage
+// Positional multi-turn servo: PWM maps to shaft position, not speed.
+// 1500 µs = mechanical center (safe default / safe at-rest position).
+// Full calibrated travel: 1000–2000 µs over 6 turns.
+// ROTOR_STOP_US kept as an alias for "safe idle position" used by
+// actuator init and PropMode (where the safran must be held at center).
 static constexpr uint16_t ROTOR_CENTER_US = 1500;
-
-// Keep old name used by the rest of the code.
-// Important: this is now "center position", not "stop speed".
-static constexpr uint16_t ROTOR_STOP_US = ROTOR_CENTER_US;
-
-// Start with full RC range. Reduce to 1200/1800 for first bench test if needed.
-static constexpr uint16_t ROTOR_MIN_US = 1000;
-static constexpr uint16_t ROTOR_MAX_US = 2000;
+static constexpr uint16_t ROTOR_STOP_US   = ROTOR_CENTER_US;
+static constexpr uint16_t ROTOR_MIN_US    = 1000;  // reduce to 1200 if mechanical limits require
+static constexpr uint16_t ROTOR_MAX_US    = 2000;  // reduce to 1800 if mechanical limits require
 
 // Pro-Tronik Black Fet ESCs
 static constexpr uint16_t ESC_STOP_US    = 1000;  // motor off

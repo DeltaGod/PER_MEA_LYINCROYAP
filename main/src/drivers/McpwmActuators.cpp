@@ -28,14 +28,14 @@ ok &= t0 && t1;
 DBG("ACT", "timer init: T0=%s T1=%s freq=%uHz",
     t0?"OK":"FAIL", t1?"OK":"FAIL", (unsigned)Calibration::PWM_FREQ_HZ);
 
-// PWM2 / Safran / GPIO25 passes through an NPN level shifter.
-// A common-emitter NPN inverts the signal, so MCPWM0B must output
-// an active-low pulse. After the NPN, the REGATTA ECO II receives
-// the normal active-high RC servo pulse.
-mcpwm_set_duty_type(MCPWM_UNIT_0,
-                    MCPWM_TIMER_0,
-                    MCPWM_OPR_B,
-                    MCPWM_DUTY_MODE_1);
+// Both servo channels use DUTY_MODE_0 (active-high pulse).
+// Empirically: DUTY_MODE_0 produces a valid servo signal through
+// the PCB's BC548 NPN level-shifter on both PWM1 and PWM2.
+// DUTY_MODE_1 was previously applied to MCPWM_OPR_B under the
+// assumption that the NPN common-emitter circuit required
+// pre-inversion, but this caused the rotor servo to receive an
+// unusable signal. Sail (OPR_A) was always MODE_0 and worked.
+// Both channels must be MODE_0.
 
 // Output safe starting positions immediately
 mcpwm_set_duty_in_us(MCPWM_UNIT_0, MCPWM_TIMER_0, MCPWM_OPR_A, Calibration::SAIL_CENTER_US);

@@ -13,7 +13,7 @@ The drone is a sail-powered surface vehicle. The key mechanics:
 
 - **Wing-profile sail** freely rotates around a vertical axis attached to the hull. Its aerodynamic profile passively orients it so the wind is always ~45° from the drone's centerline.
 - **Aileron servo (sail servo):** Controls a small flap at the trailing edge of the sail. Range is strictly ±10°. This binary-ish deflection determines whether the sail pushes the drone to port or starboard. It cannot be moved to arbitrary angles — only the two extreme positions have physical meaning.
-- **Rotor servo (Safran/rudder servo):** Controls the differential between the sail's free rotation and a fixed rotor at the stern. This is the primary yaw/heading actuator. **The Regatta ECO II is a WINCH servo** capable of 6 full rotations, not a standard 180° servo — it continuously rotates in the direction and speed dictated by the PWM deviation from center (1500 µs). This means the rotor can be positioned over multiple full turns, which is intentional for the mechanical linkage.
+- **Rotor servo (Safran/rudder servo):** Controls the differential between the sail's free rotation and a fixed rotor at the stern. This is the primary yaw/heading actuator. **The Regatta ECO II is a positional multi-turn winch servo** — PWM sets a target shaft position (not a speed). 1500 µs = mechanical center, 1000 µs = one travel extreme, 2000 µs = other extreme. It holds position like a standard servo but has 6 full turns of travel instead of 180°. In manual mode CH4 stick position maps directly to rotor position; deadband snaps to exact center.
 - **Propellers (1 or 2, TBD):** Used only when wind is insufficient. Two ESCs allow differential thrust for steering when propeller mode is active.
 - **No wind sensor** — wind direction must be estimated from GPS track and actuator state.
 
@@ -413,7 +413,7 @@ The Arduino IDE only compiles `.cpp` files that are in the same folder as the `.
 | Weather protection | Splash resistant (not waterproof) |
 | Connector | JR standard |
 
-**Critical note:** This is a **winch servo**. When PWM = 1500 µs → stopped. When PWM > 1500 µs → rotates in one direction. When PWM < 1500 µs → rotates in the other direction. Speed is proportional to deviation from 1500 µs. It does NOT hold a position like a normal servo — it drives until the sheet/mechanical stop is reached or until commanded to stop. The PCB power path must support up to 3.3 A peak for this servo.
+**Critical note:** This is a **positional multi-turn winch servo**. PWM sets a target shaft position, not a speed. 1500 µs = mechanical center (servo holds there). 1000 µs = one travel extreme. 2000 µs = other travel extreme. It holds position under load like a standard servo. Unlike a continuous-rotation servo, it does NOT free-spin — it seeks and holds the commanded position within its 6-turn travel range. The PCB power path must support up to 3.3 A peak for this servo.
 
 ### Pro-Tronik PTR-6A Transmitter
 | Parameter | Value |
@@ -514,6 +514,8 @@ The Arduino IDE only compiles `.cpp` files that are in the same folder as the `.
 | 2026-05-04 | Phase 3 — LoRa: LoRaRadio driver (SPI HSPI, 433 MHz, RST=-1), LoRaComm protocol layer (JSON heartbeat TX 1 Hz, command dispatcher: navigate/stop/home/waypoints/wind-command/wind-observation/restart). DroneApp updated with loraHbTick() at 1 s, [LORA] debug line. Serial monitoring via pyserial venv: confirmed [LORA] OK at boot and tx counter incrementing at 1 Hz. Blocking TX ≈450 ms per packet noted — acceptable for Phase 3. |
 | 2026-05-04 | Phase 3 — Transceiver: created `transceiver/transceiver.ino` ground station sketch. Shorthand CLI commands (navigate, stop, restart, wind-obs, wind \<deg\>, home \<lat,lon\>, wpt \<lat,lon,...\>) + raw JSON passthrough. Compiled and hardware-tested on T-Beam: [LORA] OK, 433 MHz, listening. Both sketches now at 359 KB / 302 KB flash respectively. |
 | 2026-05-05 | Phase 3 — Full uplink verified: added DEBUG_MODE flag (`DebugConfig.h`), debug prints in `LoRaRadio::poll()` and `LoRaComm::dispatch()`, `rxDetected_` counter. Created `lora_uplink_test.py` (5-burst per command strategy). All 7 commands pass: navigate ✓ stop ✓ home ✓ waypoints ✓ wind-command ✓ wind-obs ✓ restart ✓. RSSI −101 to −106 dBm at 5 cm range. Timing collision explained and mitigated by burst strategy. Phase 3 COMPLETE. |
+| 2026-05-20 | PWM2 / Rotor servo fix — Regatta ECO II on GPIO25 (PWM_2) was not responding. Root cause: `McpwmActuators::begin()` called `mcpwm_set_duty_type(..., MCPWM_OPR_B, MCPWM_DUTY_MODE_1)` on the rotor channel under the assumption that the BC548 NPN level-shifter inverts the signal and the MCPWM output needed pre-inversion. But the sail servo on the same type of NPN circuit works with DUTY_MODE_0 (default), proving MODE_1 was double-inverting the rotor signal into an unusable waveform. Fix: removed the `mcpwm_set_duty_type` call entirely — both OPR_A (sail) and OPR_B (rotor) now use DUTY_MODE_0. Also corrected Calibration.h and ManualController.cpp: Regatta ECO II is a positional multi-turn servo (PWM = target position, not speed), ROTOR_CENTER_US=1500 is the neutral/hold position. Rotor block in computeServoMode() indentation fixed. |
+| 2026-05-20 | GPS external antenna debug — Taoglas ADFGP.25A connected to T-Beam u.FL, no fix outdoors. Diagnosed via serial: `chars=10` frozen (vs thousands expected) = GPS outputting zero NMEA. Root cause: a prior session had saved a CFG-PRT config to the NEO-6M's internal flash that disabled NMEA output. GPS was alive (ACKed UBX commands — those 10 bytes = one UBX ACK-ACK frame) but silent. Fix 1: UBX CFG-CFG factory reset (clearMask=0x1F, loadMask=0x1F, deviceMask=0x17) wipes the saved flash config and restores ROM defaults including NMEA at 9600 baud. Fix 2: UBX CFG-ANT (flags=0x001B) enables the antenna supervisor: provides DC bias voltage through coax to power the Taoglas active LNA, and asserts ANT_FLAG to switch the T-Beam RF switch from internal ceramic patch to external u.FL. Both commands sent in GpsUart::begin() on every boot. Result: NMEA restored, fix acquired outdoors in <60 s, 7 satellites, hdop=2.2, position 48.360476 −4.566822 (Brest area). |
 
 ---
 
@@ -521,7 +523,7 @@ The Arduino IDE only compiles `.cpp` files that are in the same folder as the `.
 
 ### ManualController — ManualServo mode
 - **CH2 → sail (binary):** center deadband ±35 µs. First frame initializes sail state from stick position to avoid snap on mode entry. Inside deadband: hold last state.
-- **CH4 → rotor (winch):** direct pass-through, deadband ±35 µs around 1500 µs → stop. No position tracking — operator must know drum position.
+- **CH4 → rotor (positional):** stick position maps linearly to rotor target position (ROTOR_MIN_US–ROTOR_MAX_US). Deadband ±35 µs around center snaps to ROTOR_CENTER_US (1500). The Regatta ECO II holds its position, so the operator moves the stick to set the desired rotor angle and releases — no need to hold.
 
 ### ManualController — ManualProp mode
 - **Arming:** CH3 must stay ≤ 1050 µs for 2 continuous seconds. If throttle rises above 1050 µs at any point the countdown resets. Serial prints `[hold throttle low to ARM]` while waiting.
@@ -575,6 +577,22 @@ Before water testing, verify each subsystem in order:
 - T-Beam V1.1 hardware confirmed: LoRa RST = **GPIO23**
 - `Post-Claude/config/BoardConfig.h` uses `LORA_RST = 23` (correct)
 - If the PCB has an explicit LoRa RST line to a different pin via the expansion header, the PCB schematic takes precedence — verify before Phase 3
+
+### GPS NEO-6M — saved flash config can disable NMEA output
+- The NEO-6M has its own internal flash that survives power-off and battery removal.
+- A previous session using Arduino IDE serial monitor, u-center, or any tool that sends CFG-PRT/CFG-MSG can save a config to that flash that disables NMEA output.
+- **Symptom:** `chars` counter stuck at exactly 10 (= one 10-byte UBX ACK-ACK frame). GPS is powered and responds to UBX commands but produces zero NMEA sentences.
+- **Diagnosis:** `chars=10` frozen vs chars climbing at ~180 bytes/s when healthy.
+- **Fix in code (GpsUart::begin):** Sends UBX CFG-CFG factory reset on every boot (clearMask=0x1F, loadMask=0x1F, deviceMask=0x17) to wipe the saved flash config and reload ROM defaults. Followed by CFG-ANT for active antenna. This makes the GPS immune to stale flash configs across sessions.
+
+### GPS NEO-6M — active external antenna requires software enable (CFG-ANT)
+- Antenna used: **Taoglas ADFGP.25A** (active patch, u.FL connector, fits T-Beam directly).
+- The NEO-6M antenna supervisor is OFF by default (`flags=0x0000`). Without enabling it:
+  1. No DC bias voltage is provided through the coax → the Taoglas LNA has no power → receives nothing.
+  2. The T-Beam RF switch (`ANT_FLAG` output of NEO-6M) stays on the internal ceramic patch → the u.FL connector is electrically bypassed even when physically connected.
+- **Fix:** UBX CFG-ANT with `flags=0x001B` (svcs=1, scd=1, pdwnOnSCD=1, recovery=1) sent in GpsUart::begin() after the factory reset.
+- **Result confirmed:** 7 satellites, hdop=2.2, fix in <60 s in open sky.
+- **Note:** GPS does not work under roofs or heavy obstructions even with a good antenna. `chars` will increment (NMEA flowing) but `visible` will stay 0. Move to open sky before diagnosing antenna issues.
 
 ### GPIO32/33 — ESC outputs vs LoRa DIO1/DIO2
 - T-Beam V1.1: GPIO32 = LoRa DIO1, GPIO33 = LoRa DIO2
