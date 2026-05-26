@@ -10,8 +10,7 @@ bool LoRaRadio::begin() {
               BoardConfig::LORA_MOSI_PIN,
               BoardConfig::LORA_CS_PIN);
     LoRa.setSPI(SPI);
-    // RST = -1: skip hardware reset — GPIO23 is shared with RC CH6 on this PCB
-    LoRa.setPins(BoardConfig::LORA_CS_PIN, -1, BoardConfig::LORA_IRQ_PIN);
+    LoRa.setPins(BoardConfig::LORA_CS_PIN, BoardConfig::LORA_RST_PIN, BoardConfig::LORA_IRQ_PIN);
     // First attempt — may fail if SX1276 is in a stuck TX state from a previous run
     ready_ = (LoRa.begin(433E6) == 1);
     if (!ready_) {

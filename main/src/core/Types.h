@@ -14,7 +14,6 @@ struct RcFrame {
     uint16_t ch3 = 0;
     uint16_t ch4 = 0;
     uint16_t ch5 = 0;
-    uint16_t ch6 = 0;
 };
 
 // Target pulse widths for all actuators in microseconds.
@@ -23,7 +22,6 @@ struct ActuatorCommand {
     uint16_t sailUs  = 1520;  // Futaba S3003 center
     uint16_t rotorUs = 1500;  // Regatta ECO II stopped
     uint16_t esc1Us  = 1000;  // stopped
-    uint16_t esc2Us  = 1000;  // stopped
 };
 
 struct GpsPosition {

@@ -19,7 +19,7 @@ void DroneApp::begin() {
     Serial.println("\n=== SeaDrone boot ===");
     DBG("APP", "boot start");
 
-    // 1. AXP192: enable power rails, then release I2C pins for RC use
+    // 1. AXP192: enable power rails (LDO2=LoRa, LDO3=GPS, DCDC1=3.3V)
     if (!AxpPower::begin()) {
         Serial.println("[AXP]  WARN: init failed — check I2C bus. Continuing.");
     } else {
@@ -28,9 +28,9 @@ void DroneApp::begin() {
 
     // 2. Battery ADC: set attenuation before first read
     battery_.begin();
-    Serial.println("[BAT]  OK  — R1=560k R2=120k, 11dB attenuation");
+    Serial.println("[BAT]  OK  — R2=562k R1=120k, 11dB attenuation");
 
-    // 3. RC receiver: attaches interrupts (after Wire.end releases GPIO21/22)
+    // 3. RC receiver: attaches interrupts on CH2/CH3/CH4/CH5
     rc_.begin();
     Serial.println("[RC]   OK  — waiting for signal...");
 
@@ -38,7 +38,7 @@ void DroneApp::begin() {
     gps_.begin();
     Serial.println("[GPS]  OK  — waiting for fix (GPIO34 RX, GPIO12 TX, 9600 baud)");
 
-    // 5. LoRa: SX1276 on SPI HSPI (SCK=5 MISO=19 MOSI=27 CS=18), DIO0=26, no RST
+    // 5. LoRa: SX1276 on SPI HSPI (SCK=5 MISO=19 MOSI=27 CS=18), DIO0=26, RST=23
     if (!loraRadio_.begin()) {
         Serial.println("[LORA]  ERROR: init failed — check SPI wiring / AXP192 LDO2");
     } else {
@@ -56,7 +56,7 @@ void DroneApp::begin() {
     manual_.reset();
 
     Serial.println("=== Ready ===");
-    Serial.println("Format: [MODE] CH2=#### CH3=#### CH4=#### CH5=#### | sail=#### rotor=#### esc1=#### esc2=####");
+    Serial.println("Format: [MODE] CH2=#### CH3=#### CH4=#### CH5=#### | sail=#### rotor=#### esc1=####");
     DBG("APP", "boot complete");
 }
 
@@ -121,11 +121,11 @@ void DroneApp::debugTick() {
     // Arming indicator appended when in prop mode and ESC not yet armed
     const bool showArming = (activeMode_ == ControlMode::ManualProp && !manual_.isEscArmed());
 
-    Serial.printf("[%s] CH2=%4u CH3=%4u CH4=%4u CH5=%4u CH6=%4u | sail=%4u rotor=%4u esc1=%4u esc2=%4u | bat=%.2fV%s\n",
+    Serial.printf("[%s] CH2=%4u CH3=%4u CH4=%4u CH5=%4u | sail=%4u rotor=%4u esc1=%4u | bat=%.2fV%s\n",
         modeName(activeMode_),
-        lastFrame_.ch2, lastFrame_.ch3, lastFrame_.ch4, lastFrame_.ch5, lastFrame_.ch6,
+        lastFrame_.ch2, lastFrame_.ch3, lastFrame_.ch4, lastFrame_.ch5,
         lastCommand_.sailUs, lastCommand_.rotorUs,
-        actuators_.esc1Us(), actuators_.esc2Us(),
+        actuators_.esc1Us(),
         lastBatVolts_,
         showArming ? "  [hold throttle low to ARM]" : "");
 

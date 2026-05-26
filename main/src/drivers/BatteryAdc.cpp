@@ -2,9 +2,9 @@
 #include "../config/BoardConfig.h"
 #include "../config/DebugConfig.h"
 
-// R1=560kΩ (high side), R2=120kΩ (low side to GND)
-// V_bat = V_pin × (R1+R2)/R2
-static constexpr float DIVIDER_RATIO = (560000.0f + 120000.0f) / 120000.0f;
+// R5=562kΩ (high side, battery to ADC pin), R6=120kΩ (low side to GND)
+// V_bat = V_pin × (R5+R6)/R6
+static constexpr float DIVIDER_RATIO = (562000.0f + 120000.0f) / 120000.0f;
 
 void BatteryAdc::begin() {
     analogSetPinAttenuation(BoardConfig::BATTERY_ADC_PIN, ADC_11db);

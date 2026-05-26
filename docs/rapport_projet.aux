@@ -1,0 +1,146 @@
+\relax 
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\gdef \LT@i {\LT@entry 
+    {1}{125.81102pt}\LT@entry 
+    {1}{268.0748pt}}
+\@writefile{toc}{\contentsline {section}{\numberline {1}Présentation du projet}{2}{section.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.1}Concept physique}{2}{subsection.1.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.2}Matériel principal}{2}{subsection.1.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {2}Code original — \texttt  {boat.ino}}{3}{section.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Architecture et fonctionnement}{3}{subsection.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Problèmes et limitations identifiés}{3}{subsection.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.2.1}Bibliothèque ESP32Servo — conflit LEDC/interruptions}{3}{subsubsection.2.2.1}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {1}ServoControl.cpp original -- utilisation d'ESP32Servo}{4}{lstlisting.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.2.2}Attribution des broches RC — conflit I2C/AXP192}{4}{subsubsection.2.2.2}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {2}config\_pins.h original -- broches RC sur I2C}{4}{lstlisting.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.2.3}Broche batterie GPIO35 — drain de 20~mA continu}{4}{subsubsection.2.2.3}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {3}config\_pins.h original -- broche batterie}{4}{lstlisting.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.2.4}Broche LoRa RST — erreur de documentation}{5}{subsubsection.2.2.4}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {4}config\_pins.h original -- LoRa RST incorrect}{5}{lstlisting.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {2.2.5}Gestion ESC — absence d'armement et de limitation de variation}{5}{subsubsection.2.2.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {3}PCB Version 1 — Carte d'interface originale}{5}{section.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Description}{5}{subsection.3.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}Problèmes identifiés sur le PCB V1}{5}{subsection.3.2}\protected@file@percent }
+\gdef \LT@ii {\LT@entry 
+    {1}{111.58464pt}\LT@entry 
+    {1}{282.30118pt}}
+\@writefile{toc}{\contentsline {section}{\numberline {4}Réécriture logicielle — Architecture Post-Claude}{6}{section.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Motivations}{6}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}Architecture en couches}{6}{subsection.4.2}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {5}Arborescence du projet Post-Claude}{6}{lstlisting.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Décisions techniques fondamentales}{7}{subsection.4.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.3.1}MCPWM obligatoire — jamais LEDC}{7}{subsubsection.4.3.1}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {6}McpwmActuators.cpp -- initialisation MCPWM}{7}{lstlisting.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.3.2}Interruptions RC avec protection portMUX}{7}{subsubsection.4.3.2}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {7}RcReceiver.cpp -- ISR et section critique}{7}{lstlisting.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.3.3}Toutes les consignes actionneurs en microsecondes}{8}{subsubsection.4.3.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.3.4}Slew rate — protection contre les à-coups}{8}{subsubsection.4.3.4}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {8}McpwmActuators.cpp -- limitation de variation}{8}{lstlisting.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {4.3.5}Armement ESC — sécurité démarrage}{9}{subsubsection.4.3.5}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {9}ManualController.cpp -- procedure d'armement}{9}{lstlisting.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {5}Phase 1 — Contrôle manuel RC}{9}{section.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Réalisation}{9}{subsection.5.1}\protected@file@percent }
+\gdef \LT@iii {\LT@entry 
+    {1}{140.0374pt}\LT@entry 
+    {1}{253.84842pt}}
+\gdef \LT@iv {\LT@entry 
+    {1}{68.9055pt}\LT@entry 
+    {1}{97.35826pt}\LT@entry 
+    {1}{239.62204pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Modes de vol}{10}{subsection.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Contrôle de l'aileron — logique binaire}{10}{subsection.5.3}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {10}Logique aileron binaire avec etat memorise}{10}{lstlisting.10}\protected@file@percent }
+\gdef \LT@v {\LT@entry 
+    {1}{140.0374pt}\LT@entry 
+    {1}{253.84842pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.4}Résultats des tests — Phase 1}{11}{subsection.5.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {6}Phase 2 — GPS et navigation}{11}{section.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Réalisation}{11}{subsection.6.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Problème critique — GPS muet après config flash}{12}{subsection.6.2}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {11}GpsUart.cpp -- reset usine NEO-6M au demarrage}{12}{lstlisting.11}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Problème critique — Antenne active non alimentée}{12}{subsection.6.3}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {12}GpsUart.cpp -- activation superviseur d'antenne (CFG-ANT)}{12}{lstlisting.12}\protected@file@percent }
+\gdef \LT@vi {\LT@entry 
+    {1}{140.0374pt}\LT@entry 
+    {1}{253.84842pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.4}Note sur le démarrage à froid (cold start)}{13}{subsection.6.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {7}Phase 3 — LoRa et télémétrie}{13}{section.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Réalisation}{13}{subsection.7.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Protocole JSON LoRa}{14}{subsection.7.2}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {13}Heartbeat drone vers station sol (p\'eriode 1 s)}{14}{lstlisting.13}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {14}Commandes station sol vers drone}{14}{lstlisting.14}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.3}Résultats}{14}{subsection.7.3}\protected@file@percent }
+\gdef \LT@vii {\LT@entry 
+    {1}{83.13188pt}\LT@entry 
+    {1}{68.9055pt}\LT@entry 
+    {1}{211.16928pt}}
+\@writefile{toc}{\contentsline {section}{\numberline {8}PCB Version 2 — Améliorations matérielles}{15}{section.8}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.1}Motivations}{15}{subsection.8.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.2}Correspondance des broches — PCB V2}{15}{subsection.8.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.3}Amplification de niveau logique — Transistors BC548}{16}{subsection.8.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.4}Mesure de tension batterie — diviseur haute impédance}{16}{subsection.8.4}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {15}BatteryAdc.cpp -- calcul de tension}{16}{lstlisting.15}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.5}Problème rencontré — résistances inversées}{17}{subsection.8.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {8.6}Gestion de l'AXP192 — I2C persistant}{17}{subsection.8.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {9}Problèmes rencontrés et solutions détaillées}{17}{section.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.1}Matériel — ESP32 / T-Beam}{18}{subsection.9.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.1.1}GPIO35 — drain de 20~mA continu}{18}{subsubsection.9.1.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.1.2}LoRa RST — pin incorrect dans la documentation}{18}{subsubsection.9.1.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.1.3}AXP192 — GPS non alimenté}{18}{subsubsection.9.1.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.2}Logiciel — Firmware}{19}{subsection.9.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.2.1}DUTY\_MODE\_1 sur OPR\_B — servo safran inopérant}{19}{subsubsection.9.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.2.2}Seuil d'armement ESC trop bas}{19}{subsubsection.9.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.2.3}Mode bloqué en Automatic — confusion CH4/CH5}{20}{subsubsection.9.2.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.2.4}GPS — config flash désactivant NMEA}{20}{subsubsection.9.2.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.2.5}GPS — antenne active non alimentée}{20}{subsubsection.9.2.5}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsubsection}{\numberline {9.2.6}Port série occupé lors du flash}{20}{subsubsection.9.2.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {10}État actuel du système}{20}{section.10}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.1}Résumé des phases}{20}{subsection.10.1}\protected@file@percent }
+\gdef \LT@viii {\LT@entry 
+    {1}{54.67912pt}\LT@entry 
+    {1}{154.26378pt}\LT@entry 
+    {1}{68.9055pt}\LT@entry 
+    {1}{140.0374pt}}
+\gdef \LT@ix {\LT@entry 
+    {1}{154.26378pt}\LT@entry 
+    {1}{83.13188pt}\LT@entry 
+    {1}{83.13188pt}}
+\gdef \LT@x {\LT@entry 
+    {1}{154.26378pt}\LT@entry 
+    {1}{68.9055pt}\LT@entry 
+    {1}{168.49014pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.2}Utilisation flash / RAM}{21}{subsection.10.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {10.3}Valeurs de calibration actuelles}{21}{subsection.10.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {11}Plan de développement futur}{22}{section.11}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.1}Phase 4 — Capteurs I2C}{22}{subsection.11.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.2}Phase 5 — Estimateur de vent}{22}{subsection.11.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.3}Phase 6 — Navigation autonome à la voile}{22}{subsection.11.3}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {16}Algorithme SailAutoMode (pseudo-code)}{22}{lstlisting.16}\protected@file@percent }
+\gdef \LT@xi {\LT@entry 
+    {1}{125.81102pt}\LT@entry 
+    {1}{268.0748pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.4}Phase 7 — Mission complète}{23}{subsection.11.4}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {12}Environnement de développement}{23}{section.12}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {12.1}Outils}{23}{subsection.12.1}\protected@file@percent }
+\gdef \LT@xii {\LT@entry 
+    {1}{83.13188pt}\LT@entry 
+    {1}{296.52756pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {12.2}Commandes utiles}{24}{subsection.12.2}\protected@file@percent }
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {17}Compiler et flasher le firmware}{24}{lstlisting.17}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {13}Journal de développement}{24}{section.13}\protected@file@percent }
+\gdef \LT@xiii {\LT@entry 
+    {1}{154.26378pt}\LT@entry 
+    {1}{211.16928pt}}
+\@writefile{toc}{\contentsline {section}{\numberline {A}Spécifications des composants}{25}{appendix.A}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {A.1}Futaba S3003 — Servo aileron}{25}{subsection.A.1}\protected@file@percent }
+\gdef \LT@xiv {\LT@entry 
+    {1}{154.26378pt}\LT@entry 
+    {1}{211.16928pt}}
+\gdef \LT@xv {\LT@entry 
+    {1}{154.26378pt}\LT@entry 
+    {1}{211.16928pt}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {A.2}Graupner Regatta ECO II (mod. 5176) — Treuil safran}{26}{subsection.A.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {A.3}Pro-Tronik PTR-6A / R8X}{26}{subsection.A.3}\protected@file@percent }
+\gdef \@abspage@last{27}

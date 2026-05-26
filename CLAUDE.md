@@ -37,30 +37,30 @@ The drone is a sail-powered surface vehicle. The key mechanics:
 - AXP192 power management IC (internal I2C at GPIO21/22 — see conflict note below)
 - USB-C, LiPo connector, 18650 battery holder
 
-### PCB V2 pin mapping (from `BoardConfig.h` + schematic)
+### PCB V2 pin mapping (from `BoardConfig.h` + schematic) — FINAL
 
 | Signal | GPIO | Notes |
 |---|---|---|
-| RC CH2 (sail toggle) | 13 | RC PWM input |
-| RC CH3 (propulsion throttle) | 22 | RC PWM input ⚠️ conflicts with AXP192 SCL |
-| RC CH4 (rotor / differential) | 21 | RC PWM input ⚠️ conflicts with AXP192 SDA |
-| RC CH5 (mode selector) | 4 | RC PWM input |
-| RC CH6 (reserved) | 23 | RC PWM input |
-| Sail servo PWM out | 2 | Via 3.3→5V level shifter |
-| Rotor servo PWM out | 25 | Via 3.3→5V level shifter |
-| ESC 1 PWM out | 32 | |
-| ESC 2 PWM out | 33 | |
-| Battery ADC | 35 | Input only GPIO, voltage divider |
+| RC CH2 (sail toggle) | 39 | SVN, input-only GPIO |
+| RC CH3 (propulsion throttle) | 14 | |
+| RC CH4 (rotor) | 13 | |
+| RC CH5 (mode selector) | 4 | |
+| Sail servo PWM out | 2 | Via BC548 NPN level shifter (DUTY_MODE_0) |
+| Rotor servo PWM out | 25 | Via BC548 NPN level shifter (DUTY_MODE_0) |
+| ESC 1 PWM out | 15 | Single ESC — no ESC2 |
+| Battery ADC | 36 | SVP, external divider R5=562kΩ / R6=120kΩ |
 | GPS RX (Serial1) | 34 | Input only GPIO |
 | GPS TX (Serial1) | 12 | |
-| LoRa SCK | 5 | SPI |
-| LoRa MISO | 19 | SPI |
-| LoRa MOSI | 27 | SPI |
-| LoRa CS | 18 | SPI |
-| LoRa RST | 14 | |
+| LoRa SCK | 5 | SPI HSPI |
+| LoRa MISO | 19 | SPI HSPI |
+| LoRa MOSI | 27 | SPI HSPI |
+| LoRa CS | 18 | SPI HSPI |
+| LoRa RST | 23 | Now enabled (CH6 removed) |
 | LoRa IRQ | 26 | |
+| I2C SDA (expansion) | 21 | Free — wired to PCB expansion connector |
+| I2C SCL (expansion) | 22 | Free — wired to PCB expansion connector |
 
-⚠️ **I2C conflict:** GPIO21 and GPIO22 are used by AXP192 internally AND by the PCB as RC PWM inputs. External I2C sensors cannot share these pins. Sensor I2C must use other GPIO pins or be routed through a different bus. The AXP192 on the T-Beam continues to work because it is wired internally (not through the PCB expansion header).
+**I2C status:** GPIO21/22 are now FREE in PCB V2. RC channels no longer use these pins. Wire.end() removed from AxpPower — I2C bus stays persistent for future sensors. The expansion connector on PCB V2 exposes GPIO21/22 for external I2C devices.
 
 ### PCB components (V2 schematic)
 - NPN transistors for 3.3V→5V level shifting on PWM outputs
@@ -79,11 +79,11 @@ The drone is a sail-powered surface vehicle. The key mechanics:
 ### Calibration values (from `Calibration.h` — Post-Claude)
 - Sail servo center: **1520 µs** (Futaba S3003 standard)
 - Sail servo ±10° positions: SAIL_PLUS_US=1575, SAIL_MINUS_US=1465 — **NEEDS BENCH CALIBRATION**
-- Rotor servo: 1100–1900 µs, center 1500 µs (stop), deadband ±35 µs
+- Rotor servo: 1000–2000 µs, center 1500 µs (hold position), deadband ±35 µs
 - ESC: 1000 µs (stop) to 2000 µs (full throttle)
-- ESC arming requires holding throttle at ≤1050 µs for 2 seconds
-- ESC differential max: 200 µs (scales with throttle so no spin at idle)
+- ESC arming requires holding throttle at ≤**1300** µs for 2 seconds (PTR-6A minimum stick = ~1265 µs)
 - Slew rate limit: 30 µs/tick (prevents hard jerks on actuator changes)
+- Battery divider: R5=562kΩ (battery→ADC), R6=120kΩ (GND), ratio=5.683, GPIO36 ADC1_CH0
 
 ---
 
@@ -95,11 +95,11 @@ The architecture from `Post_GPT` is adopted and extended. It is **layered OOP, e
 main.ino
   └── DroneApp (orchestrator, tick-based scheduler)
         ├── DRIVERS (hardware interface)
-        │     ├── RcReceiver      — interrupt-driven, 5 channels, ISR-safe
-        │     ├── McpwmActuators  — MCPWM (not LEDC!) for sail, rotor, ESC1, ESC2
+        │     ├── RcReceiver      — interrupt-driven, 4 channels (CH2/3/4/5), ISR-safe
+        │     ├── McpwmActuators  — MCPWM (not LEDC!) for sail, rotor, ESC1 (single)
         │     ├── GpsUart         — Serial1, TinyGPSPlus parser
-        │     ├── LoRaRadio       — SX1276 via LoRa library, SPI
-        │     ├── BatteryAdc      — GPIO35 ADC, voltage divider
+        │     ├── LoRaRadio       — SX1276 via LoRa library, SPI, RST=GPIO23
+        │     ├── BatteryAdc      — GPIO36 ADC, R5=562kΩ/R6=120kΩ divider
         │     ├── SensorBus       — I2C sensors (pins TBD — not GPIO21/22)
         │     ├── Storage         — SPIFFS or SD card
         │     └── BtPositionBridge— Bluetooth fallback position
@@ -238,11 +238,11 @@ Mode mapping: Failsafe/Manual → `"standby"`, Auto+Idle/Complete → `"route-re
 
 | Module | File | Status | Notes |
 |---|---|---|---|
-| `AxpPower` | `drivers/AxpPower.h/.cpp` | ✅ | AXP192 init: LDO2/LDO3/DCDC1 enabled, Wire.end() releases GPIO21/22 |
-| `RcReceiver` | `drivers/RcReceiver.h/.cpp` | ✅ | 5-ch interrupt PWM, ISR-safe portMUX, 100 ms timeout |
-| `McpwmActuators` | `drivers/McpwmActuators.h/.cpp` | ✅ | MCPWM Timers 0+1, slew limiting, safe initial positions |
+| `AxpPower` | `drivers/AxpPower.h/.cpp` | ✅ | AXP192 init: LDO2/LDO3/DCDC1 enabled. Wire.end() REMOVED — I2C stays persistent |
+| `RcReceiver` | `drivers/RcReceiver.h/.cpp` | ✅ | 4-ch (CH2/3/4/5) interrupt PWM, ISR-safe portMUX, 100 ms timeout. CH6 removed. |
+| `McpwmActuators` | `drivers/McpwmActuators.h/.cpp` | ✅ | MCPWM Timers 0+1, slew limiting, single ESC on GPIO15. ESC2 removed. |
 | `ModeManager` | `control/ModeManager.h/.cpp` | ✅ | CH5 → Failsafe/ManualServo/ManualProp/Automatic |
-| `ManualController` | `control/ManualController.h/.cpp` | ✅ | Binary sail, winch pass-through, ESC arming + differential |
+| `ManualController` | `control/ManualController.h/.cpp` | ✅ | Binary sail, winch positional, single ESC arming. Prop: CH3→throttle + CH4→rotor |
 | `DroneApp` | `app/DroneApp.h/.cpp` | ✅ | 20 ms control tick, 200 ms debug serial, arming indicator |
 | `Types` | `core/Types.h` | ✅ | ControlMode enum, RcFrame, ActuatorCommand structs |
 | `BoardConfig` | `config/BoardConfig.h` | ✅ | All pin assignments and RC thresholds |
@@ -265,7 +265,7 @@ GPS hardware notes: board requires LiPo battery for warm starts (without battery
 
 | Module | File | Status | Notes |
 |---|---|---|---|
-| `LoRaRadio` | `drivers/LoRaRadio.h/.cpp` | ✅ | SPI HSPI, 433 MHz, RST=-1 (GPIO23 shared with RC CH6), blocking TX |
+| `LoRaRadio` | `drivers/LoRaRadio.h/.cpp` | ✅ | SPI HSPI, 433 MHz, RST=GPIO23 (enabled — CH6 removed), blocking TX |
 | `LoRaComm` | `comm/LoRaComm.h/.cpp` | ✅ | JSON heartbeat TX 1 Hz, command dispatch (navigate/stop/home/waypoints/wind/restart) |
 | `DroneApp` | `app/DroneApp.h/.cpp` | ✅ | loraHbTick() at 1 s, lora_.update() every loop, [LORA] debug line |
 | Transceiver | `transceiver/transceiver.ino` | ✅ | Ground station sketch — shorthand commands + raw JSON passthrough, tested on T-Beam |
@@ -296,16 +296,16 @@ Sensors (Phase 4), Wind Estimator (Phase 5), Autonomous Sailing (Phase 6), Full 
 - Hardware tested: GPS receives NMEA (cold start without LiPo — fix after ~2 min outdoors)
 - **Remaining hardware action**: install LiPo battery for warm start
 
-### Phase 3 — LoRa integration ✅ COMPLETE
-- LoRaRadio driver: SPI HSPI, 433 MHz, RST skipped (GPIO23/CH6 conflict)
+### Phase 3 — LoRa integration ✅ COMPLETE (all 7 uplink commands verified)
+- LoRaRadio driver: SPI HSPI, 433 MHz, RST=GPIO23 (enabled after PCB V2 removes CH6)
 - LoRaComm: JSON heartbeat TX at 1 Hz, full command dispatcher
 - Transceiver ground station sketch: shorthand CLI + raw JSON passthrough
-- Hardware tested: TX verified (tx counter increments), transceiver boots and listens
-- **Remaining**: two-device end-to-end test (drone TX → transceiver RX → command response)
+- Hardware tested: all 7 uplink commands verified (navigate/stop/home/wpt/wind-cmd/wind-obs/restart)
+- End-to-end test complete: RSSI −101 to −106 dBm at close range
 
 ### Phase 4 — Sensors (I2C)
 - Identify which sensors are used and their I2C addresses
-- Select alternate I2C pins (NOT GPIO21/22 — taken by RC CH4/CH3)
+- GPIO21/22 are now available (PCB V2 expansion connector) — can be used for I2C sensors
 - Implement `SensorBus.cpp` with bus scan and sample collection
 
 ### Phase 5 — Wind Estimator
@@ -333,13 +333,13 @@ Sensors (Phase 4), Wind Estimator (Phase 5), Autonomous Sailing (Phase 6), Full 
 2. **Storage**: Is there an SD card slot on the PCB V2? Or use SPIFFS only?
 3. **Ground station**: ✅ Resolved — second T-Beam running `transceiver/transceiver.ino` (Post-Claude). Bridges USB serial ↔ LoRa. Shorthand commands: navigate, stop, restart, wind-obs, wind \<deg\>, home \<lat,lon\>, wpt \<lat,lon,...\>.
 4. **Compass/IMU**: Is there an IMU or magnetometer? Crucial when stationary or in currents for heading without GPS motion. Not mentioned in any file so far.
-5. **Single vs dual propeller**: ESC1 (GPIO32) and ESC2 (GPIO33) are wired on the PCB. Is the hardware definitely dual-prop?
+5. **Single vs dual propeller**: ✅ Resolved — PCB V2 uses single ESC on GPIO15. ESC2 removed from code and hardware.
 6. **LoRa band**: 433 MHz confirmed in both versions. Regional regulations (Europe/Argentina)?
 7. **Bluetooth position bridge**: Is this feature actually planned? (GPS phone backup via BT SPP)
 
 ### Resolved questions
-- **AXP192 usage**: ✅ Yes — AxpPower.cpp explicitly enables LDO2 (LoRa), LDO3 (GPS), DCDC1 (3.3V), battery ADC. Wire.end() after init releases GPIO21/22 for RC interrupts.
-- **Battery ADC**: ✅ Use AXP192 internal ADC (already enabled in AxpPower.cpp). Future `BatteryService` will do a brief Wire.begin(21,22) → read → Wire.end() at 250 ms intervals. Do NOT use GPIO35 external divider — the on-board resistor divider (~370 Ω total) draws 20 mA continuously from the battery (see Section 15).
+- **AXP192 usage**: ✅ Yes — AxpPower.cpp explicitly enables LDO2 (LoRa), LDO3 (GPS), DCDC1 (3.3V), battery ADC. Wire.end() REMOVED from success path — I2C bus stays persistent for future sensors on GPIO21/22 expansion connector.
+- **Battery ADC**: ✅ Implemented — BatteryAdc.cpp reads GPIO36 (SVP, ADC1_CH0) with external voltage divider R5=560kΩ / R6=120kΩ (ratio=5.683). This is NOT GPIO35 (which has a low-resistance divider causing 20 mA drain). GPIO36 divider uses high-value resistors: drain ≈ 10.9 µA at 7.4 V.
 - **Sail center calibration**: ✅ Futaba S3003 center = 1520 µs confirmed. Calibration.h updated. SAIL_PLUS_US=1575, SAIL_MINUS_US=1465 still need bench verification.
 
 ---
@@ -353,9 +353,10 @@ Sensors (Phase 4), Wind Estimator (Phase 5), Autonomous Sailing (Phase 6), Full 
 | `main/config/BoardConfig.h` | All pin assignments, RC thresholds, mode selector thresholds |
 | `main/config/Calibration.h` | Servo/ESC µs values (SAIL_PLUS/MINUS_US need bench calibration) |
 | `main/core/Types.h` | ControlMode enum, RcFrame struct, ActuatorCommand struct |
-| `main/drivers/AxpPower.h/.cpp` | AXP192 init: enables LDO2 (LoRa), LDO3 (GPS), DCDC1 (3.3V), then Wire.end() |
-| `main/drivers/RcReceiver.h/.cpp` | Interrupt-driven RC PWM reading, 5 channels, ISR-safe with portMUX |
-| `main/drivers/McpwmActuators.h/.cpp` | MCPWM output for sail servo, rotor winch, ESC1, ESC2 with slew limiting |
+| `main/drivers/AxpPower.h/.cpp` | AXP192 init: enables LDO2 (LoRa), LDO3 (GPS), DCDC1 (3.3V). Wire stays active. |
+| `main/drivers/BatteryAdc.h/.cpp` | GPIO36 ADC1_CH0, R5=562kΩ/R6=120kΩ divider, 11dB attenuation |
+| `main/drivers/RcReceiver.h/.cpp` | Interrupt-driven RC PWM reading, 4 channels (CH2/3/4/5), ISR-safe with portMUX |
+| `main/drivers/McpwmActuators.h/.cpp` | MCPWM output for sail servo (GPIO2), rotor (GPIO25), ESC1 (GPIO15). Single ESC. |
 | `main/control/ModeManager.h/.cpp` | Decodes CH5 → ControlMode (Failsafe / ManualServo / ManualProp) |
 | `main/control/ManualController.h/.cpp` | RC → ActuatorCommand: binary sail, winch pass-through, ESC differential + arming |
 | `main/app/DroneApp.h/.cpp` | Orchestrator: 20/200/1000 ms ticks (control/debug/LoRa heartbeat) |
@@ -369,6 +370,8 @@ Sensors (Phase 4), Wind Estimator (Phase 5), Autonomous Sailing (Phase 6), Full 
 | `test/CMakeLists.txt` | Native Linux build for logic unit tests (no hardware needed) |
 | `test/stubs/Arduino.h` | Minimal Arduino type stub (uint8_t etc.) for host compilation |
 | `test/test_runner.cpp` | 106 test cases: ModeManager, ManualController servo/prop/arming/failsafe |
+| `docs/rapport_projet.tex` | French technical report (pdflatex, 29 pages) — project history, phases, problems/solutions |
+| `docs/rapport_projet.pdf` | Compiled PDF — regenerate with `pdflatex -interaction=nonstopmode rapport_projet.tex` (run twice) |
 
 ### Note on Arduino IDE folder structure
 The Arduino IDE only compiles `.cpp` files that are in the same folder as the `.ino` OR inside a `src/` subdirectory. All source subdirectories live under `main/src/`. All `#include` statements within `src/` use relative paths (`../sibling/` or `./samedir`) — the IDE does **not** add `src/` subdirectories to the include search path automatically.
@@ -457,7 +460,7 @@ The Arduino IDE only compiles `.cpp` files that are in the same folder as the `.
 | Cont. current (BF30A) | 30 A |
 | Cont. current (BF45A) | 45 A |
 
-**Arming:** Must calibrate endpoints (full throttle then idle at power-on) or use EPRG-3 card. In code, ESC arms after holding ≤1050 µs for 2 seconds (as implemented in ManualController).
+**Arming:** Must calibrate endpoints (full throttle then idle at power-on) or use EPRG-3 card. In code, ESC arms after holding ≤1300 µs for 2 seconds. Note: PTR-6A stick minimum is ~1265 µs, so the old 1050 µs threshold was unreachable — updated in Calibration.h.
 
 ---
 
@@ -475,8 +478,8 @@ The Arduino IDE only compiles `.cpp` files that are in the same folder as the `.
 | LoRa DIO2 | 32 | |
 | GPS TX (board→GPS) | 12 | UART1 |
 | GPS RX (GPS→board) | 34 | UART1, input-only |
-| I2C SDA | 21 | AXP192 (0x34) + OLED (0x3C) — PCB also uses for RC CH4 |
-| I2C SCL | 22 | AXP192 + OLED — PCB also uses for RC CH3 |
+| I2C SDA | 21 | AXP192 (0x34) + OLED (0x3C) — PCB V2: free, wired to expansion connector |
+| I2C SCL | 22 | AXP192 + OLED — PCB V2: free, wired to expansion connector |
 | User button | 38 | Pull-up, falling-edge |
 | Blue LED | 14 | |
 | Battery ADC | 35 | Input-only |
@@ -492,7 +495,7 @@ The Arduino IDE only compiles `.cpp` files that are in the same folder as the `.
 
 **⚠️ CRITICAL: GPS does not work until AXP192 LDO3 is set to 3300 mV and enabled.** This must be done in code before initializing Serial1 for GPS.
 
-**LoRa RST pin:** Post_GPT used GPIO14, T-Beam V1.1 hardware uses GPIO23, but GPIO23 conflicts with RC CH6 on the PCB. Resolution: LoRaRadio driver passes RST=-1 (no hardware reset). SX1276 initializes reliably without it — confirmed working in Phase 3.
+**LoRa RST pin:** T-Beam V1.1 hardware uses GPIO23. In PCB V1, GPIO23 was shared with RC CH6, so RST was passed as -1. In PCB V2, CH6 is removed — GPIO23 is now free and LoRa RST is properly connected. `LoRaRadio.cpp` updated to pass RST=GPIO23.
 
 ---
 
@@ -516,6 +519,8 @@ The Arduino IDE only compiles `.cpp` files that are in the same folder as the `.
 | 2026-05-05 | Phase 3 — Full uplink verified: added DEBUG_MODE flag (`DebugConfig.h`), debug prints in `LoRaRadio::poll()` and `LoRaComm::dispatch()`, `rxDetected_` counter. Created `lora_uplink_test.py` (5-burst per command strategy). All 7 commands pass: navigate ✓ stop ✓ home ✓ waypoints ✓ wind-command ✓ wind-obs ✓ restart ✓. RSSI −101 to −106 dBm at 5 cm range. Timing collision explained and mitigated by burst strategy. Phase 3 COMPLETE. |
 | 2026-05-20 | PWM2 / Rotor servo fix — Regatta ECO II on GPIO25 (PWM_2) was not responding. Root cause: `McpwmActuators::begin()` called `mcpwm_set_duty_type(..., MCPWM_OPR_B, MCPWM_DUTY_MODE_1)` on the rotor channel under the assumption that the BC548 NPN level-shifter inverts the signal and the MCPWM output needed pre-inversion. But the sail servo on the same type of NPN circuit works with DUTY_MODE_0 (default), proving MODE_1 was double-inverting the rotor signal into an unusable waveform. Fix: removed the `mcpwm_set_duty_type` call entirely — both OPR_A (sail) and OPR_B (rotor) now use DUTY_MODE_0. Also corrected Calibration.h and ManualController.cpp: Regatta ECO II is a positional multi-turn servo (PWM = target position, not speed), ROTOR_CENTER_US=1500 is the neutral/hold position. Rotor block in computeServoMode() indentation fixed. |
 | 2026-05-20 | GPS external antenna debug — Taoglas ADFGP.25A connected to T-Beam u.FL, no fix outdoors. Diagnosed via serial: `chars=10` frozen (vs thousands expected) = GPS outputting zero NMEA. Root cause: a prior session had saved a CFG-PRT config to the NEO-6M's internal flash that disabled NMEA output. GPS was alive (ACKed UBX commands — those 10 bytes = one UBX ACK-ACK frame) but silent. Fix 1: UBX CFG-CFG factory reset (clearMask=0x1F, loadMask=0x1F, deviceMask=0x17) wipes the saved flash config and restores ROM defaults including NMEA at 9600 baud. Fix 2: UBX CFG-ANT (flags=0x001B) enables the antenna supervisor: provides DC bias voltage through coax to power the Taoglas active LNA, and asserts ANT_FLAG to switch the T-Beam RF switch from internal ceramic patch to external u.FL. Both commands sent in GpsUart::begin() on every boot. Result: NMEA restored, fix acquired outdoors in <60 s, 7 satellites, hdop=2.2, position 48.360476 −4.566822 (Brest area). |
+| 2026-05-24 | PCB V2 hardware adaptation — all 13 source files updated to match final PCB V2 pin mapping: CH2=GPIO39, CH3=GPIO14, CH4=GPIO13, CH5=GPIO4, ESC1=GPIO15, BatADC=GPIO36, LoRa RST=GPIO23. CH6 and ESC2 removed entirely. Wire.end() removed from AxpPower (I2C stays persistent, GPIO21/22 free for sensors). BatteryAdc driver added (R5=562kΩ/R6=120kΩ, GPIO36, 11dB attenuation). ESC_ARM_MAX_US raised to 1300 µs (PTR-6A stick minimum ≈1265 µs). Clean compile: 27% flash, 7% RAM. |
+| 2026-05-24 | Technical report — created `docs/rapport_projet.tex` (29 pages, French, pdflatex). Covers all phases, problems and solutions, hardware specs, PCB V1/V2 changes, code architecture, development journal. Compiled to `rapport_projet.pdf`. |
 
 ---
 
@@ -526,8 +531,8 @@ The Arduino IDE only compiles `.cpp` files that are in the same folder as the `.
 - **CH4 → rotor (positional):** stick position maps linearly to rotor target position (ROTOR_MIN_US–ROTOR_MAX_US). Deadband ±35 µs around center snaps to ROTOR_CENTER_US (1500). The Regatta ECO II holds its position, so the operator moves the stick to set the desired rotor angle and releases — no need to hold.
 
 ### ManualController — ManualProp mode
-- **Arming:** CH3 must stay ≤ 1050 µs for 2 continuous seconds. If throttle rises above 1050 µs at any point the countdown resets. Serial prints `[hold throttle low to ARM]` while waiting.
-- **Differential thrust:** `diffUs = steer × throttleNorm × 200 / 1_000_000`. Scales with throttle so the drone does not yaw at idle. Max differential = 200 µs.
+- **Arming:** CH3 must stay ≤ **1300** µs for 2 continuous seconds (PTR-6A stick minimum is ~1265 µs — old 1050 µs threshold was never reachable). Serial prints `[hold throttle low to ARM]` while waiting.
+- **Single ESC + rotor steering:** CH3 → ESC1 throttle (linear map). CH4 → rotor position (same deadband logic as servo mode). No differential thrust in PCB V2.
 - `toSigned1000(us)` = `(int32_t(us) − 1500) × 2` → range −1000..+1000
 
 ### Future WinchTracker (Phase 6 prerequisite)
@@ -566,17 +571,15 @@ Before water testing, verify each subsystem in order:
 - Connecting wrong-voltage pack without correct cell count setting risks ESC damage or incorrect LVC cutoff
 - Do this before any powered ESC test
 
-### Battery voltage divider drain (GPIO35)
-- The on-board voltage divider connected to GPIO35 uses resistors with total resistance ~370 Ω
-- This causes ~20 mA continuous drain from the battery even when the ADC is not being read
-- **Decision: do not read GPIO35**; use AXP192 internal battery ADC instead
-- Future `BatteryService` implementation: Wire.begin(21,22) → axp.getBattVoltage() → Wire.end() at 250 ms period
+### Battery voltage divider drain (GPIO35) — RESOLVED in PCB V2
+- The PCB V1 on-board voltage divider on GPIO35 used low-value resistors (~370 Ω total) → 20 mA continuous drain.
+- **PCB V2 resolution:** New divider on GPIO36 uses R5=560kΩ / R6=120kΩ → drain ≈ 10.9 µA at 7.4 V (acceptable). BatteryAdc.cpp reads GPIO36 ADC1_CH0 with 11 dB attenuation. Do NOT read GPIO35 — it was replaced by GPIO36 and the old divider is harmful.
 
-### LoRa RST pin discrepancy (Post_GPT vs hardware)
-- `Post_GPT/config/BoardConfig.h` defines `LORA_RST_PIN = 14`
-- T-Beam V1.1 hardware confirmed: LoRa RST = **GPIO23**
-- `Post-Claude/config/BoardConfig.h` uses `LORA_RST = 23` (correct)
-- If the PCB has an explicit LoRa RST line to a different pin via the expansion header, the PCB schematic takes precedence — verify before Phase 3
+### LoRa RST pin — RESOLVED in PCB V2
+- T-Beam V1.1 hardware: LoRa RST = GPIO23. Post_GPT incorrectly used GPIO14.
+- PCB V1 shared GPIO23 with RC CH6, so RST was passed as -1 (skipped).
+- PCB V2 removes CH6 entirely → GPIO23 is free → LoRa RST properly enabled.
+- `LoRaRadio.cpp` now passes `RST=BoardConfig::LORA_RST_PIN` (GPIO23).
 
 ### GPS NEO-6M — saved flash config can disable NMEA output
 - The NEO-6M has its own internal flash that survives power-off and battery removal.
@@ -594,11 +597,10 @@ Before water testing, verify each subsystem in order:
 - **Result confirmed:** 7 satellites, hdop=2.2, fix in <60 s in open sky.
 - **Note:** GPS does not work under roofs or heavy obstructions even with a good antenna. `chars` will increment (NMEA flowing) but `visible` will stay 0. Move to open sky before diagnosing antenna issues.
 
-### GPIO32/33 — ESC outputs vs LoRa DIO1/DIO2
+### GPIO32/33 — ESC outputs vs LoRa DIO1/DIO2 — RESOLVED
 - T-Beam V1.1: GPIO32 = LoRa DIO1, GPIO33 = LoRa DIO2
-- PCB V2: GPIO32 = ESC1 PWM, GPIO33 = ESC2 PWM
-- **Acceptable for Phase 1–2:** LoRa is not initialized; DIO1/DIO2 are only needed for certain LoRa modes (not mandatory for basic TX/RX)
-- **Phase 3 result:** DIO1/DIO2 are NOT needed — the LoRa library uses only DIO0 (GPIO26) for interrupt-driven mode, and Phase 3 uses polling (`parsePacket()`) which doesn't require any DIO pin. No conflict.
+- PCB V1 used GPIO32/33 for ESC1/ESC2. PCB V2 uses GPIO15 for the single ESC → GPIO32/33 are now free.
+- LoRa library uses only DIO0 (GPIO26) for polling mode. DIO1/DIO2 not needed. No conflict in any PCB version.
 
 ---
 

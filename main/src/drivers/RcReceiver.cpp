@@ -5,12 +5,11 @@
 
 RcReceiver* RcReceiver::instance_ = nullptr;
 
-static const uint8_t kPins[5] = {
+static const uint8_t kPins[4] = {
     BoardConfig::RX_CH2_PIN,
     BoardConfig::RX_CH3_PIN,
     BoardConfig::RX_CH4_PIN,
     BoardConfig::RX_CH5_PIN,
-    BoardConfig::RX_CH6_PIN,
 };
 
 void RcReceiver::begin() {
@@ -23,10 +22,9 @@ void RcReceiver::begin() {
     attachInterrupt(digitalPinToInterrupt(BoardConfig::RX_CH3_PIN), isrCH3, CHANGE);
     attachInterrupt(digitalPinToInterrupt(BoardConfig::RX_CH4_PIN), isrCH4, CHANGE);
     attachInterrupt(digitalPinToInterrupt(BoardConfig::RX_CH5_PIN), isrCH5, CHANGE);
-    attachInterrupt(digitalPinToInterrupt(BoardConfig::RX_CH6_PIN), isrCH6, CHANGE);
-    DBG("RC", "ISRs attached: CH2=GPIO%d CH3=GPIO%d CH4=GPIO%d CH5=GPIO%d CH6=GPIO%d",
+    DBG("RC", "ISRs attached: CH2=GPIO%d CH3=GPIO%d CH4=GPIO%d CH5=GPIO%d",
         BoardConfig::RX_CH2_PIN, BoardConfig::RX_CH3_PIN, BoardConfig::RX_CH4_PIN,
-        BoardConfig::RX_CH5_PIN, BoardConfig::RX_CH6_PIN);
+        BoardConfig::RX_CH5_PIN);
 }
 
 // NOTE: Serial must NOT be called from ISR context.
@@ -77,7 +75,6 @@ RcFrame RcReceiver::readFrame() const {
     f.ch3 = getChannel(Ch::CH3);
     f.ch4 = getChannel(Ch::CH4);
     f.ch5 = getChannel(Ch::CH5);
-    f.ch6 = getChannel(Ch::CH6);
     return f;
 }
 
@@ -85,4 +82,3 @@ void IRAM_ATTR RcReceiver::isrCH2() { if (instance_) instance_->handleEdge(Board
 void IRAM_ATTR RcReceiver::isrCH3() { if (instance_) instance_->handleEdge(BoardConfig::RX_CH3_PIN, Ch::CH3); }
 void IRAM_ATTR RcReceiver::isrCH4() { if (instance_) instance_->handleEdge(BoardConfig::RX_CH4_PIN, Ch::CH4); }
 void IRAM_ATTR RcReceiver::isrCH5() { if (instance_) instance_->handleEdge(BoardConfig::RX_CH5_PIN, Ch::CH5); }
-void IRAM_ATTR RcReceiver::isrCH6() { if (instance_) instance_->handleEdge(BoardConfig::RX_CH6_PIN, Ch::CH6); }

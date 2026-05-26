@@ -37,8 +37,5 @@ bool AxpPower::begin() {
     axp.adc1Enable(AXP202_BATT_VOL_ADC1 | AXP202_BATT_CUR_ADC1, true);
     DBG("AXP", "battery ADC enabled");
 
-    // Release I2C peripheral so GPIO21/22 become available for RC interrupts.
-    Wire.end();
-    DBG("AXP", "Wire.end — GPIO21/22 released for RC interrupts");
     return true;
 }

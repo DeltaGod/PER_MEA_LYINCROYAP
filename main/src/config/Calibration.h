@@ -27,7 +27,7 @@ static constexpr uint16_t ROTOR_MAX_US    = 2000;  // reduce to 1800 if mechanic
 // Pro-Tronik Black Fet ESCs
 static constexpr uint16_t ESC_STOP_US    = 1000;  // motor off
 static constexpr uint16_t ESC_MAX_US     = 2000;  // full throttle
-static constexpr uint16_t ESC_ARM_MAX_US = 1050;  // throttle must be ≤ this to trigger arming
+static constexpr uint16_t ESC_ARM_MAX_US = 1300;  // throttle must be ≤ this to trigger arming
 static constexpr uint32_t ESC_ARM_MS     = 2000;  // hold time required to arm
 
 // Differential steering limit in ManualProp mode

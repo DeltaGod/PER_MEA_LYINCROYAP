@@ -3,44 +3,38 @@
 
 namespace BoardConfig {
 
-// I2C — AXP192 power manager (T-Beam internal bus)
-// GPIO21/22 are reclaimed as RC inputs after AXP192 init + Wire.end()
+// I2C — AXP192 power manager (T-Beam internal bus, GPIO21/22)
+// GPIO21 and GPIO22 remain dedicated to I2C; they are also wired to an
+// expansion connector on the V2 PCB for future external I2C peripherals.
 static constexpr uint8_t I2C_SDA_PIN = 21;
 static constexpr uint8_t I2C_SCL_PIN = 22;
 
 // RC receiver inputs — interrupt-driven PWM (Pro-Tronik R8X)
-static constexpr uint8_t RX_CH2_PIN = 13;  // sail toggle
-static constexpr uint8_t RX_CH3_PIN = 22;  // propulsion throttle  (shared I2C SCL — OK after Wire.end)
-static constexpr uint8_t RX_CH4_PIN = 21;  // rotor / differential  (shared I2C SDA — OK after Wire.end)
-static constexpr uint8_t RX_CH5_PIN =  4;  // mode selector
-static constexpr uint8_t RX_CH6_PIN = 23;  // reserved — WARNING: T-Beam V1.1 connects LoRa RST to GPIO23
-                                            // Verify PCB schematic before enabling CH6 interrupt
+static constexpr uint8_t RX_CH2_PIN = 39;  // sail toggle       (GPIO39 SVN, input-only)
+static constexpr uint8_t RX_CH3_PIN = 14;  // propulsion throttle
+static constexpr uint8_t RX_CH4_PIN = 13;  // rotor winch
+static constexpr uint8_t RX_CH5_PIN =  4;  // mode selector (3-pos switch)
 
 // Actuator PWM outputs — MCPWM only, never LEDC (LEDC breaks RC interrupts)
-static constexpr uint8_t SAIL_SERVO_PIN  =  2;
-static constexpr uint8_t ROTOR_SERVO_PIN = 25;
-static constexpr uint8_t ESC1_PIN        = 32;  // also T-Beam LoRa DIO1 — OK while LoRa unused
-static constexpr uint8_t ESC2_PIN        = 33;  // also T-Beam LoRa DIO2 — OK while LoRa unused
+static constexpr uint8_t SAIL_SERVO_PIN  =  2;  // PWM1
+static constexpr uint8_t ROTOR_SERVO_PIN = 25;  // PWM2
+static constexpr uint8_t ESC1_PIN        = 15;  // single ESC
 
-// Battery ADC — external voltage divider (R1=560kΩ, R2=120kΩ)
-// GPIO35 CANNOT be used: T-Beam V1.1 has its own low-impedance (~165Ω) battery
-// monitoring divider permanently soldered to it, which clamps any external signal.
-// GPIO36/GPIO39 (SVP/SVN) are not broken out as physical header pins on T-Beam V1.1.
-// GPIO15 (ADC2_CH3) is the only free ADC pin on the header. ADC2 is fine here
-// because this project never activates WiFi (LoRa only).
-static constexpr uint8_t BATTERY_ADC_PIN = 15;
+// Battery ADC — external voltage divider (R2=562kΩ high-side, R1=120kΩ low-side)
+// GPIO36 (SVP, ADC1_CH0, input-only) — no continuous drain unlike GPIO35.
+static constexpr uint8_t BATTERY_ADC_PIN = 36;
 
 // GPS UART — Serial1 (future use)
 static constexpr uint8_t  GPS_RX_PIN    = 34;   // input-only GPIO
 static constexpr uint8_t  GPS_TX_PIN    = 12;
 static constexpr uint32_t GPS_BAUD_RATE = 9600;
 
-// LoRa SPI (future use)
+// LoRa SPI — SX1276 on HSPI
 static constexpr uint8_t LORA_SCK_PIN  =  5;
 static constexpr uint8_t LORA_MISO_PIN = 19;
 static constexpr uint8_t LORA_MOSI_PIN = 27;
 static constexpr uint8_t LORA_CS_PIN   = 18;
-static constexpr uint8_t LORA_RST_PIN  = 23;  // T-Beam V1.1 standard — verify vs Post_GPT GPIO14
+static constexpr uint8_t LORA_RST_PIN  = 23;  // GPIO23 now free (CH6 removed)
 static constexpr uint8_t LORA_IRQ_PIN  = 26;
 
 // RC signal validation

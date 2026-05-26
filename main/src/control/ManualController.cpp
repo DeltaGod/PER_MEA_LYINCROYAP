@@ -43,7 +43,6 @@ int16_t ManualController::toSigned1000(uint16_t us) {
 ActuatorCommand ManualController::computeServoMode(const RcFrame& frame) {
     ActuatorCommand cmd;
     cmd.esc1Us = Calibration::ESC_STOP_US;
-    cmd.esc2Us = Calibration::ESC_STOP_US;
 
     // --- Sail: binary ±10° toggle driven by CH2 ---
     if (!sailStateInitialized_) {
@@ -105,29 +104,25 @@ ActuatorCommand ManualController::computePropMode(const RcFrame& frame, uint32_t
             armStartMs_ = 0;
         }
         cmd.esc1Us = Calibration::ESC_STOP_US;
-        cmd.esc2Us = Calibration::ESC_STOP_US;
         return cmd;
     }
 
-    // Base throttle from CH3
-    const uint16_t base = mapUs(frame.ch3,
-                                BoardConfig::RC_MIN_US, BoardConfig::RC_MAX_US,
-                                Calibration::ESC_STOP_US, Calibration::ESC_MAX_US);
-
-    // Differential from CH4 — scales with throttle so the drone doesn't spin at idle
-    const int16_t  steer        = toSigned1000(frame.ch4);
-    const int32_t  throttleNorm = static_cast<int32_t>(base - Calibration::ESC_STOP_US);
-    const int32_t  diffUs       = steer * throttleNorm
-                                  * static_cast<int32_t>(Calibration::ESC_DIFF_MAX_US)
-                                  / 1000000L;
-
-    const int32_t e1 = static_cast<int32_t>(base) - diffUs;
-    const int32_t e2 = static_cast<int32_t>(base) + diffUs;
-
-    cmd.esc1Us = clamp(static_cast<uint16_t>(e1 < 0 ? 0 : e1),
+    // Throttle from CH3 — single ESC
+    cmd.esc1Us = mapUs(frame.ch3,
+                       BoardConfig::RC_MIN_US, BoardConfig::RC_MAX_US,
                        Calibration::ESC_STOP_US, Calibration::ESC_MAX_US);
-    cmd.esc2Us = clamp(static_cast<uint16_t>(e2 < 0 ? 0 : e2),
-                       Calibration::ESC_STOP_US, Calibration::ESC_MAX_US);
+
+    // Rudder/safran steering from CH4 — same deadband + positional map as servo mode
+    const uint16_t db  = BoardConfig::RC_DEADBAND_US;
+    const uint16_t ch4 = frame.ch4;
+    if (ch4 >= static_cast<uint16_t>(BoardConfig::RC_MID_US - db) &&
+        ch4 <= static_cast<uint16_t>(BoardConfig::RC_MID_US + db)) {
+        cmd.rotorUs = Calibration::ROTOR_CENTER_US;
+    } else {
+        cmd.rotorUs = mapUs(ch4,
+                            BoardConfig::RC_MIN_US, BoardConfig::RC_MAX_US,
+                            Calibration::ROTOR_MIN_US, Calibration::ROTOR_MAX_US);
+    }
     return cmd;
 }
 
