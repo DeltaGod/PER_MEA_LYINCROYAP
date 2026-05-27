@@ -20,7 +20,8 @@ void LoRaComm::update() {
 
 void LoRaComm::sendHeartbeat(ControlMode mode, MissionState mState,
                               double lat, double lon, float heading,
-                              float batVolts, uint8_t wptCur, uint8_t wptTotal) {
+                              float windDeg, float batVolts,
+                              uint8_t wptCur, uint8_t wptTotal) {
     const char* modeStr;
     const char* ctrlMode;
 
@@ -41,11 +42,11 @@ void LoRaComm::sendHeartbeat(ControlMode mode, MissionState mState,
         "\"servos\":{\"sail\":0,\"rudder\":0},"
         "\"control_mode\":\"%s\","
         "\"heading\":%.1f,"
-        "\"wind\":0,"
+        "\"wind\":%.1f,"
         "\"bat\":%.2f,"
         "\"waypoints\":{\"total\":%u,\"current\":%u}"
         "}}",
-        modeStr, lat, lon, ctrlMode, heading, batVolts,
+        modeStr, lat, lon, ctrlMode, heading, windDeg, batVolts,
         (unsigned)wptTotal, (unsigned)wptCur);
 
     if (!radio_) return;
@@ -85,7 +86,8 @@ void LoRaComm::dispatch(const char* json) {
     } else if (strstr(msg, "\"home\"")) {
         handleHome(msg);
     } else if (strstr(msg, "\"wind-observation\"")) {
-        Serial.println("[LORA] CMD: wind-observation (Phase 5 — not yet implemented)");
+        app_->startWindObservation();
+        Serial.println("[LORA] CMD: wind-observation → startWindObservation");
     } else if (strstr(msg, "\"restart\"")) {
         Serial.println("[LORA] CMD: restart");
         delay(100);
@@ -134,7 +136,8 @@ void LoRaComm::handleWindCommand(const char* msg) {
     const char* valPtr = strstr(msg, "\"value\":");
     if (!valPtr) return;
     int windDeg = atoi(valPtr + 8);
-    Serial.printf("[LORA] CMD: wind-command %d° (stored for Phase 5)\n", windDeg);
+    app_->setWindDirection((float)windDeg);
+    Serial.printf("[LORA] CMD: wind-command %d° → setWindDirection\n", windDeg);
 }
 
 void LoRaComm::handleHome(const char* msg) {

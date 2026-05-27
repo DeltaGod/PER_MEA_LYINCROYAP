@@ -9,6 +9,8 @@ include_directories(
 
 add_executable(test_runner
     test_runner.cpp
+    ../main/control/AutoController.cpp
     ../main/control/ManualController.cpp
     ../main/control/ModeManager.cpp
+    ../main/navigation/Navigator.cpp
 )

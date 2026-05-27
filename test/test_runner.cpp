@@ -6,6 +6,7 @@
 #include "core/Types.h"
 #include "config/BoardConfig.h"
 #include "config/Calibration.h"
+#include "control/AutoController.h"
 #include "control/ModeManager.h"
 #include "control/ManualController.h"
 
@@ -44,10 +45,9 @@ static void section(const char* name) {
 // ── helpers ────────────────────────────────────────────────────────────────
 
 static RcFrame makeFrame(uint16_t ch2 = 0, uint16_t ch3 = 0,
-                         uint16_t ch4 = 0, uint16_t ch5 = 0,
-                         uint16_t ch6 = 0) {
+                         uint16_t ch4 = 0, uint16_t ch5 = 0) {
     RcFrame f;
-    f.ch2 = ch2; f.ch3 = ch3; f.ch4 = ch4; f.ch5 = ch5; f.ch6 = ch6;
+    f.ch2 = ch2; f.ch3 = ch3; f.ch4 = ch4; f.ch5 = ch5;
     return f;
 }
 
@@ -61,30 +61,32 @@ void test_ModeManager() {
              (uint8_t)mm.decode(makeFrame(1500,1500,1500,0)),
              (uint8_t)ControlMode::Failsafe);
 
-    CHECK_EQ("ch5=1200 → ManualServo",
+    CHECK_EQ("ch5=999  → Automatic",
+             (uint8_t)mm.decode(makeFrame(1500,1500,1500,999)),
+             (uint8_t)ControlMode::Automatic);
+
+    CHECK_EQ("ch5=1000 → ManualServo fallback boundary",
+             (uint8_t)mm.decode(makeFrame(1500,1500,1500,1000)),
+             (uint8_t)ControlMode::ManualServo);
+
+    CHECK_EQ("ch5=1200 → ManualServo fallback",
              (uint8_t)mm.decode(makeFrame(1500,1500,1500,1200)),
-             (uint8_t)ControlMode::ManualServo);
-
-    CHECK_EQ("ch5=1299 → ManualServo",
-             (uint8_t)mm.decode(makeFrame(1500,1500,1500,1299)),
-             (uint8_t)ControlMode::ManualServo);
-
-    // boundary: 1300 is NOT < 1300, falls through to middle → ManualServo
-    CHECK_EQ("ch5=1300 → ManualServo (boundary)",
-             (uint8_t)mm.decode(makeFrame(1500,1500,1500,1300)),
              (uint8_t)ControlMode::ManualServo);
 
     CHECK_EQ("ch5=1500 → ManualServo (middle pos)",
              (uint8_t)mm.decode(makeFrame(1500,1500,1500,1500)),
              (uint8_t)ControlMode::ManualServo);
 
-    // boundary: 1700 is NOT > 1700, falls through to middle → ManualServo
-    CHECK_EQ("ch5=1700 → ManualServo (boundary)",
+    CHECK_EQ("ch5=1700 → ManualServo fallback",
              (uint8_t)mm.decode(makeFrame(1500,1500,1500,1700)),
              (uint8_t)ControlMode::ManualServo);
 
-    CHECK_EQ("ch5=1701 → ManualProp",
-             (uint8_t)mm.decode(makeFrame(1500,1500,1500,1701)),
+    CHECK_EQ("ch5=1800 → ManualServo fallback boundary",
+             (uint8_t)mm.decode(makeFrame(1500,1500,1500,1800)),
+             (uint8_t)ControlMode::ManualServo);
+
+    CHECK_EQ("ch5=1801 → ManualProp",
+             (uint8_t)mm.decode(makeFrame(1500,1500,1500,1801)),
              (uint8_t)ControlMode::ManualProp);
 
     CHECK_EQ("ch5=1900 → ManualProp",
@@ -160,12 +162,11 @@ void test_ManualController_ServoMode() {
         CHECK_EQ("ch4=1464 (outside deadband) → 1464", cmd.rotorUs, (uint16_t)1464);
     }
 
-    // ── ESCs must be stopped in servo mode
+    // ── ESC must be stopped in servo mode
     mc.reset();
     {
         ActuatorCommand cmd = mc.update(makeFrame(1600, 0, 1700, 1200), ControlMode::ManualServo, 100);
         CHECK_EQ("ServoMode: esc1 always STOP", cmd.esc1Us, Calibration::ESC_STOP_US);
-        CHECK_EQ("ServoMode: esc2 always STOP", cmd.esc2Us, Calibration::ESC_STOP_US);
     }
 
     // ── channel lost: ch2=0 → reset + safe defaults
@@ -197,7 +198,6 @@ void test_ManualController_PropMode_Arming() {
         ActuatorCommand cmd = mc.update(makeFrame(0, 1050, 1500, 1800), ControlMode::ManualProp, 100);
         CHECK("t=100 (0ms held) → not armed", !mc.isEscArmed());
         CHECK_EQ("not armed → esc1=STOP", cmd.esc1Us, Calibration::ESC_STOP_US);
-        CHECK_EQ("not armed → esc2=STOP", cmd.esc2Us, Calibration::ESC_STOP_US);
     }
 
     // Keep holding. At t=100 armStartMs_ was set to 100.
@@ -217,7 +217,7 @@ void test_ManualController_PropMode_Arming() {
 
     mc.update(makeFrame(0, 1050, 1500, 1800), ControlMode::ManualProp, 500);
     // armStartMs_ = 500, held for 0ms
-    mc.update(makeFrame(0, 1100, 1500, 1800), ControlMode::ManualProp, 700);
+    mc.update(makeFrame(0, Calibration::ESC_ARM_MAX_US + 100, 1500, 1800), ControlMode::ManualProp, 700);
     // throttle went above ESC_ARM_MAX_US → armStartMs_ reset to 0
     mc.update(makeFrame(0, 1050, 1500, 1800), ControlMode::ManualProp, 800);
     // armStartMs_ reset to 800 — new countdown
@@ -232,7 +232,7 @@ void test_ManualController_PropMode_Arming() {
 }
 
 void test_ManualController_PropMode_Throttle() {
-    section("ManualController — PropMode throttle & differential");
+    section("ManualController — PropMode throttle & rotor");
 
     // Arm helper: builds a fresh controller and arms it at t=2200
     auto makeArmedController = []() -> ManualController {
@@ -243,66 +243,60 @@ void test_ManualController_PropMode_Throttle() {
         return mc;
     };
 
-    // ── zero throttle, no steer → both ESCs at STOP
+    // ── zero throttle, no steer → ESC at STOP
     {
         ManualController mc = makeArmedController();
         ActuatorCommand cmd = mc.update(makeFrame(0, 1000, 1500, 1800), ControlMode::ManualProp, 2200);
         CHECK_EQ("ch3=1000 (zero throttle) → esc1=STOP", cmd.esc1Us, Calibration::ESC_STOP_US);
-        CHECK_EQ("ch3=1000 (zero throttle) → esc2=STOP", cmd.esc2Us, Calibration::ESC_STOP_US);
+        CHECK_EQ("ch4=1500 (center) → rotor=ROTOR_STOP_US", cmd.rotorUs, Calibration::ROTOR_STOP_US);
     }
 
-    // ── full throttle, no steer → both ESCs at MAX
+    // ── full throttle, no steer → ESC at MAX
     {
         ManualController mc = makeArmedController();
         ActuatorCommand cmd = mc.update(makeFrame(0, 2000, 1500, 1800), ControlMode::ManualProp, 2200);
         CHECK_EQ("ch3=2000 no steer → esc1=ESC_MAX", cmd.esc1Us, Calibration::ESC_MAX_US);
-        CHECK_EQ("ch3=2000 no steer → esc2=ESC_MAX", cmd.esc2Us, Calibration::ESC_MAX_US);
+        CHECK_EQ("ch3=2000 no steer → rotor=ROTOR_STOP_US", cmd.rotorUs, Calibration::ROTOR_STOP_US);
     }
 
-    // ── half throttle, no steer → both ESCs at 1500
+    // ── half throttle, no steer → ESC at 1500
     {
         ManualController mc = makeArmedController();
         ActuatorCommand cmd = mc.update(makeFrame(0, 1500, 1500, 1800), ControlMode::ManualProp, 2200);
         CHECK_EQ("ch3=1500 no steer → esc1=1500", cmd.esc1Us, (uint16_t)1500);
-        CHECK_EQ("ch3=1500 no steer → esc2=1500", cmd.esc2Us, (uint16_t)1500);
+        CHECK_EQ("ch3=1500 no steer → rotor=ROTOR_STOP_US", cmd.rotorUs, Calibration::ROTOR_STOP_US);
     }
 
-    // ── full throttle, full right steer
-    // base=2000, throttleNorm=1000, steer=+1000, diff=1000*1000*200/1000000=200
-    // e1=2000-200=1800, e2=2000+200=2200 → clamped to 2000
+    // ── full throttle, full right rotor command
     {
         ManualController mc = makeArmedController();
         ActuatorCommand cmd = mc.update(makeFrame(0, 2000, 2000, 1800), ControlMode::ManualProp, 2200);
-        CHECK_EQ("full throttle full right → esc1=1800", cmd.esc1Us, (uint16_t)1800);
-        CHECK_EQ("full throttle full right → esc2=2000 (clamped)", cmd.esc2Us, (uint16_t)2000);
+        CHECK_EQ("full throttle full right → esc1=ESC_MAX", cmd.esc1Us, Calibration::ESC_MAX_US);
+        CHECK_EQ("full throttle full right → rotor=ROTOR_MAX_US", cmd.rotorUs, Calibration::ROTOR_MAX_US);
     }
 
-    // ── full throttle, full left steer
-    // steer=-1000, diff=-200, e1=2000-(-200)=2200→clamped=2000, e2=2000+(-200)=1800
+    // ── full throttle, full left rotor command
     {
         ManualController mc = makeArmedController();
         ActuatorCommand cmd = mc.update(makeFrame(0, 2000, 1000, 1800), ControlMode::ManualProp, 2200);
-        CHECK_EQ("full throttle full left → esc1=2000 (clamped)", cmd.esc1Us, (uint16_t)2000);
-        CHECK_EQ("full throttle full left → esc2=1800", cmd.esc2Us, (uint16_t)1800);
+        CHECK_EQ("full throttle full left → esc1=ESC_MAX", cmd.esc1Us, Calibration::ESC_MAX_US);
+        CHECK_EQ("full throttle full left → rotor=ROTOR_MIN_US", cmd.rotorUs, Calibration::ROTOR_MIN_US);
     }
 
-    // ── half throttle, half right steer
-    // base=1500, throttleNorm=500, steer=+500 (ch4=1750: (1750-1500)*2=500)
-    // diff=500*500*200/1000000=50000/1000=50
-    // e1=1500-50=1450, e2=1500+50=1550
+    // ── half throttle, half right rotor command
     {
         ManualController mc = makeArmedController();
         ActuatorCommand cmd = mc.update(makeFrame(0, 1500, 1750, 1800), ControlMode::ManualProp, 2200);
-        CHECK_EQ("half throttle half-right → esc1=1450", cmd.esc1Us, (uint16_t)1450);
-        CHECK_EQ("half throttle half-right → esc2=1550", cmd.esc2Us, (uint16_t)1550);
+        CHECK_EQ("half throttle half-right → esc1=1500", cmd.esc1Us, (uint16_t)1500);
+        CHECK_EQ("half throttle half-right → rotor=1750", cmd.rotorUs, (uint16_t)1750);
     }
 
-    // ── zero throttle, any steer → diff=0 (scales with throttleNorm=0)
+    // ── zero throttle, any rotor command → ESC remains stopped
     {
         ManualController mc = makeArmedController();
         ActuatorCommand cmd = mc.update(makeFrame(0, 1000, 2000, 1800), ControlMode::ManualProp, 2200);
-        CHECK_EQ("zero throttle full steer → esc1=STOP (no yaw at idle)", cmd.esc1Us, Calibration::ESC_STOP_US);
-        CHECK_EQ("zero throttle full steer → esc2=STOP (no yaw at idle)", cmd.esc2Us, Calibration::ESC_STOP_US);
+        CHECK_EQ("zero throttle full rotor → esc1=STOP", cmd.esc1Us, Calibration::ESC_STOP_US);
+        CHECK_EQ("zero throttle full rotor → rotor=ROTOR_MAX_US", cmd.rotorUs, Calibration::ROTOR_MAX_US);
     }
 
     // ── sail and rotor forced to neutral in prop mode
@@ -333,7 +327,6 @@ void test_ManualController_Failsafe() {
         CHECK_EQ("Failsafe → sailUs default", cmd.sailUs,  (uint16_t)1520);
         CHECK_EQ("Failsafe → rotorUs default", cmd.rotorUs, (uint16_t)1500);
         CHECK_EQ("Failsafe → esc1Us default", cmd.esc1Us,  (uint16_t)1000);
-        CHECK_EQ("Failsafe → esc2Us default", cmd.esc2Us,  (uint16_t)1000);
     }
 
     // Automatic mode (unimplemented) → same safe defaults
@@ -351,11 +344,14 @@ void test_ManualController_Failsafe() {
 void edge_ModeManager_MiddleZone() {
     section("EDGE — ModeManager middle zone (ch5 just inside each side)");
     ModeManager mm;
-    // Values inside the middle band that were not explicitly tested in round 1
-    CHECK_EQ("ch5=1301 (just above SAIL_THR) → ManualServo",
-             (uint8_t)mm.decode(makeFrame(0,0,0,1301)), (uint8_t)ControlMode::ManualServo);
-    CHECK_EQ("ch5=1699 (just below PROP_THR) → ManualServo",
-             (uint8_t)mm.decode(makeFrame(0,0,0,1699)), (uint8_t)ControlMode::ManualServo);
+    CHECK_EQ("ch5=1399 (below explicit sail band) → ManualServo fallback",
+             (uint8_t)mm.decode(makeFrame(0,0,0,1399)), (uint8_t)ControlMode::ManualServo);
+    CHECK_EQ("ch5=1400 (sail band low) → ManualServo",
+             (uint8_t)mm.decode(makeFrame(0,0,0,1400)), (uint8_t)ControlMode::ManualServo);
+    CHECK_EQ("ch5=1600 (sail band high) → ManualServo",
+             (uint8_t)mm.decode(makeFrame(0,0,0,1600)), (uint8_t)ControlMode::ManualServo);
+    CHECK_EQ("ch5=1601 (above explicit sail band) → ManualServo fallback",
+             (uint8_t)mm.decode(makeFrame(0,0,0,1601)), (uint8_t)ControlMode::ManualServo);
 }
 
 void edge_SailInit_ExactMid() {
@@ -457,27 +453,27 @@ void edge_RotorDeadband_ExactBounds() {
 }
 
 void edge_ArmThreshold_Boundary() {
-    section("EDGE — ESC arming threshold boundary (ch3=1050 vs 1051)");
+    section("EDGE — ESC arming threshold boundary");
     ManualController mc;
 
-    // ch3 = ESC_ARM_MAX_US (exactly 1050) → arming triggers
+    // ch3 = ESC_ARM_MAX_US → arming triggers
     mc.reset();
-    mc.update(makeFrame(0, 1050, 1500, 1800), ControlMode::ManualProp, 100);
-    mc.update(makeFrame(0, 1050, 1500, 1800), ControlMode::ManualProp, 2100);
-    CHECK("ch3=1050 (=ESC_ARM_MAX_US) arms after 2 s", mc.isEscArmed());
+    mc.update(makeFrame(0, Calibration::ESC_ARM_MAX_US, 1500, 1800), ControlMode::ManualProp, 100);
+    mc.update(makeFrame(0, Calibration::ESC_ARM_MAX_US, 1500, 1800), ControlMode::ManualProp, 2100);
+    CHECK("ch3=ESC_ARM_MAX_US arms after 2 s", mc.isEscArmed());
 
-    // ch3 = ESC_ARM_MAX_US + 1 (1051) → arming countdown is reset every tick; never arms
+    // ch3 = ESC_ARM_MAX_US + 1 → arming countdown is reset every tick; never arms
     mc.reset();
-    mc.update(makeFrame(0, 1051, 1500, 1800), ControlMode::ManualProp, 100);
-    mc.update(makeFrame(0, 1051, 1500, 1800), ControlMode::ManualProp, 5000);
-    CHECK("ch3=1051 held 4.9 s → never arms", !mc.isEscArmed());
+    mc.update(makeFrame(0, Calibration::ESC_ARM_MAX_US + 1, 1500, 1800), ControlMode::ManualProp, 100);
+    mc.update(makeFrame(0, Calibration::ESC_ARM_MAX_US + 1, 1500, 1800), ControlMode::ManualProp, 5000);
+    CHECK("ch3=ESC_ARM_MAX_US+1 held 4.9 s → never arms", !mc.isEscArmed());
 
-    // Then drop to 1050 → countdown starts from that tick, arms 2 s later
-    mc.update(makeFrame(0, 1050, 1500, 1800), ControlMode::ManualProp, 5100);  // armStartMs_=5100
-    mc.update(makeFrame(0, 1050, 1500, 1800), ControlMode::ManualProp, 7099);
-    CHECK("ch3 dropped to 1050: not yet armed at 1999 ms", !mc.isEscArmed());
-    mc.update(makeFrame(0, 1050, 1500, 1800), ControlMode::ManualProp, 7100);
-    CHECK("ch3 dropped to 1050: armed at 2000 ms", mc.isEscArmed());
+    // Then drop to ESC_ARM_MAX_US → countdown starts from that tick, arms 2 s later
+    mc.update(makeFrame(0, Calibration::ESC_ARM_MAX_US, 1500, 1800), ControlMode::ManualProp, 5100);
+    mc.update(makeFrame(0, Calibration::ESC_ARM_MAX_US, 1500, 1800), ControlMode::ManualProp, 7099);
+    CHECK("ch3 dropped to ESC_ARM_MAX_US: not yet armed at 1999 ms", !mc.isEscArmed());
+    mc.update(makeFrame(0, Calibration::ESC_ARM_MAX_US, 1500, 1800), ControlMode::ManualProp, 7100);
+    CHECK("ch3 dropped to ESC_ARM_MAX_US: armed at 2000 ms", mc.isEscArmed());
 }
 
 void edge_RearmAfterModeSwitch() {
@@ -569,8 +565,8 @@ void edge_ResetDuringArming() {
     CHECK("after reset: armed at 2000 ms from restart", mc.isEscArmed());
 }
 
-void edge_Differential_LeftSteer_Symmetry() {
-    section("EDGE — Differential: left-steer values and left/right symmetry");
+void edge_PropMode_RotorPositions() {
+    section("EDGE — PropMode rotor positions with single ESC");
 
     auto makeArmed = []() -> ManualController {
         ManualController mc;
@@ -580,46 +576,81 @@ void edge_Differential_LeftSteer_Symmetry() {
         return mc;
     };
 
-    // Half throttle, half LEFT steer (ch4=1250):
-    // steer=(1250-1500)*2=-500, throttleNorm=500, diff=-50
-    // e1=1500-(-50)=1550, e2=1500+(-50)=1450
+    // Half throttle, half LEFT rotor command.
     {
         ManualController mc = makeArmed();
         auto cmd = mc.update(makeFrame(0, 1500, 1250, 1800), ControlMode::ManualProp, 2200);
-        CHECK_EQ("half-throttle half-left → esc1=1550", cmd.esc1Us, (uint16_t)1550);
-        CHECK_EQ("half-throttle half-left → esc2=1450", cmd.esc2Us, (uint16_t)1450);
+        CHECK_EQ("half-throttle half-left → esc1=1500", cmd.esc1Us, (uint16_t)1500);
+        CHECK_EQ("half-throttle half-left → rotor=1250", cmd.rotorUs, (uint16_t)1250);
     }
 
-    // Full throttle, quarter RIGHT steer (ch4=1750):
-    // steer=+500, throttleNorm=1000, diff=100
-    // e1=2000-100=1900, e2=2000+100=2100→2000
+    // Full throttle, quarter RIGHT rotor command.
     {
         ManualController mc = makeArmed();
         auto cmd = mc.update(makeFrame(0, 2000, 1750, 1800), ControlMode::ManualProp, 2200);
-        CHECK_EQ("full-throttle qtr-right → esc1=1900", cmd.esc1Us, (uint16_t)1900);
-        CHECK_EQ("full-throttle qtr-right → esc2=2000 (clamped)", cmd.esc2Us, (uint16_t)2000);
+        CHECK_EQ("full-throttle qtr-right → esc1=ESC_MAX", cmd.esc1Us, Calibration::ESC_MAX_US);
+        CHECK_EQ("full-throttle qtr-right → rotor=1750", cmd.rotorUs, (uint16_t)1750);
     }
 
-    // Full throttle, quarter LEFT steer (ch4=1250): mirror of above
-    // steer=-500, diff=-100, e1=2100→2000, e2=1900
+    // Full throttle, quarter LEFT rotor command.
     {
         ManualController mc = makeArmed();
         auto cmd = mc.update(makeFrame(0, 2000, 1250, 1800), ControlMode::ManualProp, 2200);
-        CHECK_EQ("full-throttle qtr-left → esc1=2000 (clamped)", cmd.esc1Us, (uint16_t)2000);
-        CHECK_EQ("full-throttle qtr-left → esc2=1900", cmd.esc2Us, (uint16_t)1900);
+        CHECK_EQ("full-throttle qtr-left → esc1=ESC_MAX", cmd.esc1Us, Calibration::ESC_MAX_US);
+        CHECK_EQ("full-throttle qtr-left → rotor=1250", cmd.rotorUs, (uint16_t)1250);
     }
 
-    // Symmetry check: right-steer and left-steer are mirror images
+    // ESC throttle is independent from rotor direction in single-ESC mode.
     {
         ManualController mc_r = makeArmed();
         ManualController mc_l = makeArmed();
         auto cr = mc_r.update(makeFrame(0, 1500, 1750, 1800), ControlMode::ManualProp, 2200);
         auto cl = mc_l.update(makeFrame(0, 1500, 1250, 1800), ControlMode::ManualProp, 2200);
-        CHECK("right steer: esc1 < esc2", cr.esc1Us < cr.esc2Us);
-        CHECK("left steer:  esc1 > esc2", cl.esc1Us > cl.esc2Us);
-        CHECK("esc values are mirror: right.esc1 == left.esc2", cr.esc1Us == cl.esc2Us);
-        CHECK("esc values are mirror: right.esc2 == left.esc1", cr.esc2Us == cl.esc1Us);
+        CHECK_EQ("right rotor: esc1 unchanged", cr.esc1Us, (uint16_t)1500);
+        CHECK_EQ("left rotor: esc1 unchanged", cl.esc1Us, (uint16_t)1500);
+        CHECK_EQ("right rotor position", cr.rotorUs, (uint16_t)1750);
+        CHECK_EQ("left rotor position", cl.rotorUs, (uint16_t)1250);
     }
+}
+
+void test_AutoController_Basic() {
+    section("AutoController — autonomous sailing basics");
+
+    GpsPosition pos;
+    pos.valid = true;
+    pos.lat = 48.000000;
+    pos.lon = -4.000000;
+    pos.courseDeg = 0.0f;
+    pos.speedKmph = 2.0f;
+
+    Waypoint north;
+    north.lat = 48.001000;
+    north.lon = -4.000000;
+    north.radiusM = 10.0f;
+
+    AutoController ac;
+    auto cmd = ac.update(pos, north);
+    CHECK_EQ("no wind estimate → safe sail center", cmd.sailUs, Calibration::SAIL_CENTER_US);
+    CHECK_EQ("no wind estimate → ESC stopped", cmd.esc1Us, Calibration::ESC_STOP_US);
+    CHECK("no wind estimate mode reported", strcmp(ac.modeName(), "no-wind") == 0);
+
+    ac.setWindDirection(90.0f);
+    cmd = ac.update(pos, north);
+    CHECK_EQ("direct aligned waypoint → rotor center", cmd.rotorUs, Calibration::ROTOR_CENTER_US);
+    CHECK_EQ("direct aligned waypoint → sail plus for wind on right", cmd.sailUs, Calibration::SAIL_PLUS_US);
+    CHECK("direct aligned mode", strcmp(ac.modeName(), "direct") == 0);
+
+    Waypoint east;
+    east.lat = 48.000000;
+    east.lon = -3.999000;
+    east.radiusM = 10.0f;
+
+    ac.reset();
+    ac.setWindDirection(90.0f);
+    cmd = ac.update(pos, east);
+    CHECK("upwind waypoint chooses zigzag mode", strcmp(ac.modeName(), "upwind-zigzag") == 0);
+    CHECK("upwind waypoint commands non-neutral rotor", cmd.rotorUs != Calibration::ROTOR_CENTER_US);
+    CHECK_EQ("auto controller never drives ESCs in sailing mode", cmd.esc1Us, Calibration::ESC_STOP_US);
 }
 
 // ── main ──────────────────────────────────────────────────────────────────
@@ -644,7 +675,8 @@ int main() {
     edge_TimerWraparound();
     edge_ArmSentinel_AtNowZero();
     edge_ResetDuringArming();
-    edge_Differential_LeftSteer_Symmetry();
+    edge_PropMode_RotorPositions();
+    test_AutoController_Basic();
 
     printf("\n=== Results: %d passed, %d failed ===\n", g_pass, g_fail);
     return (g_fail > 0) ? 1 : 0;

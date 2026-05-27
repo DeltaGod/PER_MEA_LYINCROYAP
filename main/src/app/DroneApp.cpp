@@ -54,6 +54,7 @@ void DroneApp::begin() {
     }
 
     manual_.reset();
+    auto_.reset();
 
     Serial.println("=== Ready ===");
     Serial.println("Format: [MODE] CH2=#### CH3=#### CH4=#### CH5=#### | sail=#### rotor=#### esc1=####");
@@ -105,8 +106,11 @@ void DroneApp::controlTick(uint32_t nowMs) {
     } else if (activeMode_ == ControlMode::Automatic) {
         manual_.reset();
         lastTargetActive_ = mission_.update(gps_.position(), lastTarget_);
-        // AutoController steering goes here in Phase 6 — safe defaults for now
-        lastCommand_ = ActuatorCommand{};
+        if (lastTargetActive_ || auto_.windObservationActive()) {
+            lastCommand_ = auto_.update(gps_.position(), lastTarget_);
+        } else {
+            lastCommand_ = ActuatorCommand{};
+        }
     } else {
         // Failsafe
         manual_.reset();
@@ -157,14 +161,20 @@ void DroneApp::debugTick() {
         if (lastTargetActive_ && gp.valid) {
             const float dist    = Navigator::distanceM(gp.lat, gp.lon, lastTarget_.lat, lastTarget_.lon);
             const float bearing = Navigator::bearingDeg(gp.lat, gp.lon, lastTarget_.lat, lastTarget_.lon);
-            Serial.printf("[MISN ] %s %s wp=%u/%u target=(%.6f,%.6f r=%.0fm) dist=%.0fm brg=%.0f°\n",
+            Serial.printf("[MISN ] %s %s auto=%s wind=%s %.0f° wp=%u/%u target=(%.6f,%.6f r=%.0fm) dist=%.0fm brg=%.0f°\n",
                 stateNames[s], mName,
+                auto_.modeName(),
+                auto_.hasWindDirection() ? "SET" : "NOT",
+                auto_.hasWindDirection() ? auto_.windDirectionDeg() : 0.0f,
                 (unsigned)mission_.currentIndex() + 1, (unsigned)mission_.waypointCount(),
                 lastTarget_.lat, lastTarget_.lon, lastTarget_.radiusM,
                 dist, bearing);
         } else {
-            Serial.printf("[MISN ] %s %s wp=%u/%u home=%s%s\n",
+            Serial.printf("[MISN ] %s %s auto=%s wind=%s %.0f° wp=%u/%u home=%s%s\n",
                 stateNames[s], mName,
+                auto_.modeName(),
+                auto_.hasWindDirection() ? "SET" : "NOT",
+                auto_.hasWindDirection() ? auto_.windDirectionDeg() : 0.0f,
                 (unsigned)mission_.currentIndex() + 1, (unsigned)mission_.waypointCount(),
                 mission_.hasHome() ? "SET" : "NOT SET",
                 !gp.valid ? " (no GPS fix)" : "");
@@ -178,6 +188,7 @@ void DroneApp::loraHbTick() {
         activeMode_,
         mission_.state(),
         gp.lat, gp.lon, gp.courseDeg,
+        auto_.hasWindDirection() ? auto_.windDirectionDeg() : 0.0f,
         lastBatVolts_,
         mission_.currentIndex(),
         mission_.waypointCount()

@@ -7,6 +7,7 @@
 #include "../comm/LoRaComm.h"
 #include "../control/ModeManager.h"
 #include "../control/ManualController.h"
+#include "../control/AutoController.h"
 #include "../navigation/MissionManager.h"
 #include "../core/Types.h"
 
@@ -22,6 +23,8 @@ public:
     void startMission()                        { mission_.start(); }
     void stopMission()                         { mission_.stop(); }
     void emergencyReturn()                     { mission_.emergencyReturn(); }
+    void setWindDirection(float windDeg)       { auto_.setWindDirection(windDeg); }
+    void startWindObservation()                { auto_.startWindObservation(gps_.position()); }
 
 private:
     RcReceiver       rc_;
@@ -32,6 +35,7 @@ private:
     LoRaComm         lora_;
     ModeManager      modeManager_;
     ManualController manual_;
+    AutoController   auto_;
     MissionManager   mission_;
 
     RcFrame         lastFrame_;
