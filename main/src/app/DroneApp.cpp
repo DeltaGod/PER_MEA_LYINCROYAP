@@ -17,7 +17,7 @@ void DroneApp::begin() {
     Serial.begin(115200);
     delay(200);
     Serial.println("\n=== SeaDrone boot ===");
-    DBG("APP", "boot start");
+    DBG_APP("boot start");
 
     // 1. AXP192: enable power rails (LDO2=LoRa, LDO3=GPS, DCDC1=3.3V)
     if (!AxpPower::begin()) {
@@ -57,7 +57,7 @@ void DroneApp::begin() {
 
     Serial.println("=== Ready ===");
     Serial.println("Format: [MODE] CH2=#### CH3=#### CH4=#### CH5=#### | sail=#### rotor=#### esc1=####");
-    DBG("APP", "boot complete");
+    DBG_APP("boot complete");
 }
 
 void DroneApp::update() {
@@ -93,7 +93,7 @@ void DroneApp::controlTick(uint32_t nowMs) {
 
     // Log mode transitions
     if (activeMode_ != prevMode_) {
-        DBG("APP", "mode: %s → %s  (CH5=%u)",
+        DBG_APP("mode: %s -> %s  (CH5=%u)",
             modeName(prevMode_), modeName(activeMode_), (unsigned)lastFrame_.ch5);
         prevMode_ = activeMode_;
     }
@@ -145,11 +145,13 @@ void DroneApp::debugTick() {
             Serial.printf("       last: %s\n", gps_.lastLine());
     }
 
+#if DEBUG_ENABLED && DEBUG_RADIO
     Serial.printf("[LORA] tx=%lu  rxDet=%lu  rxRssi=%d%s\n",
         (unsigned long)lora_.txCount(),
         (unsigned long)loraRadio_.rxDetectedCount(),
         lora_.lastRxRssi(),
         loraRadio_.ready() ? "" : "  [NOT INIT]");
+#endif
 
     if (activeMode_ == ControlMode::Automatic ||
         activeMode_ == ControlMode::Failsafe) {

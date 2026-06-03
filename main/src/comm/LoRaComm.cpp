@@ -7,14 +7,14 @@
 void LoRaComm::begin(LoRaRadio& radio, DroneApp& app) {
     radio_ = &radio;
     app_   = &app;
-    DBG("Comm", "begin OK");
+    DBG_RADIO("begin OK");
 }
 
 void LoRaComm::update() {
     if (!radio_) return;
     if (!radio_->poll(rxBuf_, sizeof(rxBuf_))) return;
     lastRxRssi_ = radio_->rssi();
-    Serial.printf("[LORA] RX rssi=%d  %s\n", lastRxRssi_, rxBuf_);
+    DBG_RADIO("RX rssi=%d  %s", lastRxRssi_, rxBuf_);
     dispatch(rxBuf_);
 }
 
@@ -52,24 +52,24 @@ void LoRaComm::sendHeartbeat(ControlMode mode, MissionState mState,
     if (!radio_) return;
     if (radio_->send(buf)) {
         txCount_++;
-        DBG("Comm", "HB TX #%lu mode=%s bat=%.2fV loc=(%.4f,%.4f)",
+        DBG_RADIO("HB TX #%lu mode=%s bat=%.2fV loc=(%.4f,%.4f)",
             (unsigned long)txCount_, modeStr, batVolts, lat, lon);
     }
 }
 
 void LoRaComm::dispatch(const char* json) {
-    DBG("Comm", "dispatch: %.120s", json);
+    DBG_RADIO("dispatch: %.120s", json);
     if (!strstr(json, "\"origin\":\"server\"")) {
-        DBG("Comm", "REJECTED: no origin:server");
+        DBG_RADIO("REJECTED: no origin:server");
         return;
     }
     if (!strstr(json, "\"type\":\"command\"")) {
-        DBG("Comm", "REJECTED: no type:command");
+        DBG_RADIO("REJECTED: no type:command");
         return;
     }
     const char* msg = strstr(json, "\"message\":");
     if (!msg) {
-        DBG("Comm", "REJECTED: no message field");
+        DBG_RADIO("REJECTED: no message field");
         return;
     }
 
@@ -79,16 +79,16 @@ void LoRaComm::dispatch(const char* json) {
         handleWindCommand(msg);
     } else if (strstr(msg, "\"navigate\"")) {
         app_->startMission();
-        Serial.println("[LORA] CMD: navigate → startMission");
+        DBG_RADIO("CMD: navigate → startMission");
     } else if (strstr(msg, "\"stop\"")) {
         app_->stopMission();
-        Serial.println("[LORA] CMD: stop → stopMission");
+        DBG_RADIO("CMD: stop → stopMission");
     } else if (strstr(msg, "\"home\"")) {
         handleHome(msg);
     } else if (strstr(msg, "\"wind-observation\"")) {
-        Serial.println("[LORA] CMD: wind-observation (Phase 5 — not yet implemented)");
+        DBG_RADIO("CMD: wind-observation (Phase 5 — not yet implemented)");
     } else if (strstr(msg, "\"restart\"")) {
-        Serial.println("[LORA] CMD: restart");
+        DBG_RADIO("CMD: restart");
         delay(100);
         ESP.restart();
     }
@@ -127,7 +127,7 @@ void LoRaComm::handleWaypoints(const char* msg) {
     }
     if (plan.count > 0) {
         app_->loadMission(plan);
-        Serial.printf("[LORA] CMD: waypoints loaded (%u points)\n", plan.count);
+        DBG_RADIO("CMD: waypoints loaded (%u points)", plan.count);
     }
 }
 
@@ -136,7 +136,7 @@ void LoRaComm::handleWindCommand(const char* msg) {
     if (!valPtr) return;
     float windDeg = (float)atoi(valPtr + 8);
     app_->setWindDirection(windDeg);
-    Serial.printf("[LORA] CMD: wind-command %.0f°\n", windDeg);
+    DBG_RADIO("CMD: wind-command %.0f deg", windDeg);
 }
 
 void LoRaComm::handleHome(const char* msg) {
@@ -146,5 +146,5 @@ void LoRaComm::handleHome(const char* msg) {
     double lat = atof(latPtr + 6);
     double lon = atof(lonPtr + 6);
     app_->setHome(lat, lon);
-    Serial.printf("[LORA] CMD: home (%.6f, %.6f)\n", lat, lon);
+    DBG_RADIO("CMD: home (%.6f, %.6f)", lat, lon);
 }

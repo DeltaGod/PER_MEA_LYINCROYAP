@@ -15,14 +15,14 @@ static constexpr uint16_t SAIL_MINUS_US  = 1465;  // -10° (aileron deflection, 
 
 // Graupner REGATTA ECO II 5176 — winch servo on Safran linkage
 // Positional multi-turn servo: PWM maps to shaft position, not speed.
-// 1500 µs = mechanical center (safe default / safe at-rest position).
-// Full calibrated travel: 1000–2000 µs over 6 turns.
-// ROTOR_STOP_US kept as an alias for "safe idle position" used by
-// actuator init and PropMode (where the safran must be held at center).
+// Full hardware range: 1000–2000 µs = ±3 turns = ±1080° (2.16°/µs).
+// Limited here to ±180° (1 turn total) for controllability:
+//   1417 µs = -180° | 1500 µs = 0° | 1583 µs = +180°
+//   Derivation: 180° / 2.16°/µs = 83 µs from center.
 static constexpr uint16_t ROTOR_CENTER_US = 1500;
 static constexpr uint16_t ROTOR_STOP_US   = ROTOR_CENTER_US;
-static constexpr uint16_t ROTOR_MIN_US    = 1000;  // reduce to 1200 if mechanical limits require
-static constexpr uint16_t ROTOR_MAX_US    = 2000;  // reduce to 1800 if mechanical limits require
+static constexpr uint16_t ROTOR_MIN_US    = 1417;  // -180°
+static constexpr uint16_t ROTOR_MAX_US    = 1583;  // +180°
 
 // Pro-Tronik Black Fet ESCs
 static constexpr uint16_t ESC_STOP_US    = 1000;  // motor off

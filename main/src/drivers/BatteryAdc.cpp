@@ -8,7 +8,7 @@ static constexpr float DIVIDER_RATIO = (562000.0f + 120000.0f) / 120000.0f;
 
 void BatteryAdc::begin() {
     analogSetPinAttenuation(BoardConfig::BATTERY_ADC_PIN, ADC_11db);
-    DBG("BAT", "ADC init GPIO%d attn=11dB divider=%.2fx",
+    DBG_BAT("ADC init GPIO%d attn=11dB divider=%.2fx",
         BoardConfig::BATTERY_ADC_PIN, DIVIDER_RATIO);
 }
 

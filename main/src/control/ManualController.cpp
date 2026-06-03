@@ -10,13 +10,13 @@ void ManualController::reset() {
     sailStateInitialized_ = false;
     disarm();
     if (wasInited || wasArmed) {
-        DBG("CTRL", "reset: sail→+1 (un-init)%s", wasArmed ? "  ESC disarmed" : "");
+        DBG_CTRL("reset: sail→+1 (un-init)%s", wasArmed ? "  ESC disarmed" : "");
     }
 }
 
 void ManualController::disarm() {
     if (escArmed_) {
-        DBG("CTRL", "ESC disarmed");
+        DBG_CTRL("ESC disarmed");
     }
     escArmed_   = false;
     armStartMs_ = 0;
@@ -47,7 +47,7 @@ ActuatorCommand ManualController::computeServoMode(const RcFrame& frame) {
     // --- Sail: binary ±10° toggle driven by CH2 ---
     if (!sailStateInitialized_) {
         const int8_t init = (frame.ch2 >= BoardConfig::RC_MID_US) ? +1 : -1;
-        DBG("CTRL", "sail state init: %+d (CH2=%u)", (int)init, (unsigned)frame.ch2);
+        DBG_CTRL("sail state init: %+d (CH2=%u)", (int)init, (unsigned)frame.ch2);
         sailState_            = init;
         sailStateInitialized_ = true;
     }
@@ -57,7 +57,7 @@ ActuatorCommand ManualController::computeServoMode(const RcFrame& frame) {
     else if (frame.ch2 < static_cast<uint16_t>(BoardConfig::RC_MID_US - db)) sailState_ = -1;
 
     if (sailState_ != prevSail) {
-        DBG("CTRL", "sail toggle: %+d → %+d  (CH2=%u)",
+        DBG_CTRL("sail toggle: %+d → %+d  (CH2=%u)",
             (int)prevSail, (int)sailState_, (unsigned)frame.ch2);
     }
 
@@ -73,7 +73,7 @@ ActuatorCommand ManualController::computeServoMode(const RcFrame& frame) {
         cmd.rotorUs = Calibration::ROTOR_CENTER_US;
     } else {
         cmd.rotorUs = mapUs(ch4,
-                            BoardConfig::RC_MIN_US, BoardConfig::RC_MAX_US,
+                            BoardConfig::CH4_MIN_US, BoardConfig::CH4_MAX_US,
                             Calibration::ROTOR_MIN_US, Calibration::ROTOR_MAX_US);
     }
 
@@ -89,16 +89,16 @@ ActuatorCommand ManualController::computePropMode(const RcFrame& frame, uint32_t
         if (frame.ch3 <= Calibration::ESC_ARM_MAX_US) {
             if (armStartMs_ == 0) {
                 armStartMs_ = nowMs;
-                DBG("CTRL", "ESC arm countdown started (hold CH3 ≤%u for %ums)",
+                DBG_CTRL("ESC arm countdown started (hold CH3 ≤%u for %ums)",
                     (unsigned)Calibration::ESC_ARM_MAX_US, (unsigned)Calibration::ESC_ARM_MS);
             }
             if (static_cast<uint32_t>(nowMs - armStartMs_) >= Calibration::ESC_ARM_MS) {
                 escArmed_ = true;
-                DBG("CTRL", "ESC ARMED");
+                DBG_CTRL("ESC ARMED");
             }
         } else {
             if (armStartMs_ != 0) {
-                DBG("CTRL", "ESC arm countdown reset (CH3=%u > %u)",
+                DBG_CTRL("ESC arm countdown reset (CH3=%u > %u)",
                     (unsigned)frame.ch3, (unsigned)Calibration::ESC_ARM_MAX_US);
             }
             armStartMs_ = 0;
@@ -120,7 +120,7 @@ ActuatorCommand ManualController::computePropMode(const RcFrame& frame, uint32_t
         cmd.rotorUs = Calibration::ROTOR_CENTER_US;
     } else {
         cmd.rotorUs = mapUs(ch4,
-                            BoardConfig::RC_MIN_US, BoardConfig::RC_MAX_US,
+                            BoardConfig::CH4_MIN_US, BoardConfig::CH4_MAX_US,
                             Calibration::ROTOR_MIN_US, Calibration::ROTOR_MAX_US);
     }
     return cmd;

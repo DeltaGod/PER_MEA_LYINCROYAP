@@ -48,6 +48,11 @@ static constexpr uint16_t RC_MID_US     = 1500;
 static constexpr uint16_t RC_MAX_US     = 2000;
 static constexpr uint16_t RC_DEADBAND_US = 35;
 
+// CH4 measured travel (rotor / safran stick) — measured on bench
+// Center is ~1500 µs; full stick range is 1180–1790 µs.
+static constexpr uint16_t CH4_MIN_US = 1180;
+static constexpr uint16_t CH4_MAX_US = 1790;
+
 // Mode selector thresholds — CH5 three-position switch (PTR-6A outputs ~1000/1500/2000 µs)
 // ≤1250 → Automatic | 1400–1600 → ManualServo | >1800 → ManualProp
 static constexpr uint16_t CH5_AUTO_THRESHOLD      = 1250;  // at or below → Automatic

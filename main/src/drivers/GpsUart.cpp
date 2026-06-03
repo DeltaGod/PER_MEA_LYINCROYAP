@@ -6,7 +6,7 @@ void GpsUart::begin() {
     gsvTotal_.begin(gps_, "GPGSV", 3);  // field 3 = total satellites in view
     Serial1.begin(BoardConfig::GPS_BAUD_RATE, SERIAL_8N1,
                   BoardConfig::GPS_RX_PIN, BoardConfig::GPS_TX_PIN);
-    DBG("GPS", "Serial1 started %u baud RX=GPIO%d TX=GPIO%d",
+    DBG_GPS("Serial1 started %u baud RX=GPIO%d TX=GPIO%d",
         (unsigned)BoardConfig::GPS_BAUD_RATE,
         BoardConfig::GPS_RX_PIN, BoardConfig::GPS_TX_PIN);
 
@@ -32,7 +32,7 @@ void GpsUart::begin() {
         0x71, 0xFE                       // Fletcher checksum
     };
     Serial1.write(kCfgCfgReset, sizeof(kCfgCfgReset));
-    DBG("GPS", "CFG-CFG sent — factory reset to ROM defaults");
+    DBG_GPS("CFG-CFG sent — factory reset to ROM defaults");
 
     // Wait for GPS to apply reset and restart its engine.
     delay(1500);
@@ -56,7 +56,7 @@ void GpsUart::begin() {
     };
     Serial1.write(kCfgAnt, sizeof(kCfgAnt));
     delay(100);
-    DBG("GPS", "CFG-ANT sent — active antenna supervisor + bias enabled");
+    DBG_GPS("CFG-ANT sent — active antenna supervisor + bias enabled");
 }
 
 uint8_t GpsUart::satsInView() {
@@ -82,12 +82,12 @@ void GpsUart::update() {
 
     // Log GPS fix transitions
     if (nowValid && !prevValid_) {
-        DBG("GPS", "FIX ACQUIRED  lat=%.6f lon=%.6f sats=%u hdop=%.1f",
+        DBG_GPS("FIX ACQUIRED  lat=%.6f lon=%.6f sats=%u hdop=%.1f",
             gps_.location.lat(), gps_.location.lng(),
             gps_.satellites.isValid() ? (unsigned)gps_.satellites.value() : 0u,
             gps_.hdop.isValid() ? (float)gps_.hdop.hdop() : 99.9f);
     } else if (!nowValid && prevValid_) {
-        DBG("GPS", "FIX LOST");
+        DBG_GPS("FIX LOST");
     }
     prevValid_ = nowValid;
 

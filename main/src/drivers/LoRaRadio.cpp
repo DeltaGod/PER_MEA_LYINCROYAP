@@ -25,7 +25,7 @@ bool LoRaRadio::begin() {
             ready_ = (LoRa.begin(433E6) == 1);
         }
     }
-    DBG("Radio", "begin: %s (SCK=%d MISO=%d MOSI=%d CS=%d IRQ=%d)",
+    DBG_RADIO("begin: %s (SCK=%d MISO=%d MOSI=%d CS=%d IRQ=%d)",
         ready_ ? "OK 433MHz" : "FAIL",
         BoardConfig::LORA_SCK_PIN, BoardConfig::LORA_MISO_PIN,
         BoardConfig::LORA_MOSI_PIN, BoardConfig::LORA_CS_PIN,
@@ -36,10 +36,10 @@ bool LoRaRadio::begin() {
 bool LoRaRadio::send(const char* msg) {
     if (!ready_) return false;
     if (!LoRa.beginPacket()) {
-        DBG("Radio", "TX skipped — still busy");
+        DBG_RADIO("TX skipped — still busy");
         return false;
     }
-    DBG("Radio", "TX %u bytes", (unsigned)strlen(msg));
+    DBG_RADIO("TX %u bytes", (unsigned)strlen(msg));
     LoRa.print(msg);
     LoRa.endPacket(true);  // async — returns immediately, radio transmits in background
     return true;
@@ -49,7 +49,7 @@ bool LoRaRadio::poll(char* buf, size_t maxLen) {
     if (!ready_) return false;
     static uint32_t pollCount = 0;
     if (++pollCount % 100 == 0) {
-        DBG("Radio", "DIAG #%lu op=0x%02X irq=0x%02X",
+        DBG_RADIO("DIAG #%lu op=0x%02X irq=0x%02X",
             (unsigned long)pollCount,
             (unsigned)LoRa.debugOpMode(),
             (unsigned)LoRa.debugIrqFlags());
@@ -57,7 +57,7 @@ bool LoRaRadio::poll(char* buf, size_t maxLen) {
     int sz = LoRa.parsePacket();
     if (sz > 0) {
         rxDetected_++;
-        DBG("Radio", "RX pkt detected sz=%d rssi=%d", sz, LoRa.packetRssi());
+        DBG_RADIO("RX pkt detected sz=%d rssi=%d", sz, LoRa.packetRssi());
     }
     if (sz <= 0) return false;
     size_t i = 0;
@@ -66,6 +66,6 @@ bool LoRaRadio::poll(char* buf, size_t maxLen) {
     }
     buf[i]    = '\0';
     lastRssi_ = LoRa.packetRssi();
-    DBG("Radio", "RX read %u bytes", (unsigned)i);
+    DBG_RADIO("RX read %u bytes", (unsigned)i);
     return i > 0;
 }

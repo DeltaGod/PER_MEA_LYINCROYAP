@@ -22,7 +22,7 @@ void RcReceiver::begin() {
     attachInterrupt(digitalPinToInterrupt(BoardConfig::RX_CH3_PIN), isrCH3, CHANGE);
     attachInterrupt(digitalPinToInterrupt(BoardConfig::RX_CH4_PIN), isrCH4, CHANGE);
     attachInterrupt(digitalPinToInterrupt(BoardConfig::RX_CH5_PIN), isrCH5, CHANGE);
-    DBG("RC", "ISRs attached: CH2=GPIO%d CH3=GPIO%d CH4=GPIO%d CH5=GPIO%d",
+    DBG_RC("ISRs attached: CH2=GPIO%d CH3=GPIO%d CH4=GPIO%d CH5=GPIO%d",
         BoardConfig::RX_CH2_PIN, BoardConfig::RX_CH3_PIN, BoardConfig::RX_CH4_PIN,
         BoardConfig::RX_CH5_PIN);
 }
