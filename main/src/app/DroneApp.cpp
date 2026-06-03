@@ -102,16 +102,18 @@ void DroneApp::controlTick(uint32_t nowMs) {
         activeMode_ == ControlMode::ManualProp) {
         lastCommand_ = manual_.update(lastFrame_, activeMode_, nowMs);
         lastTargetActive_ = false;
-    } else if (activeMode_ == ControlMode::Automatic) {
+    } else {
+        // Automatic OR Failsafe (RC lost) — both follow LoRa mission
         manual_.reset();
         lastTargetActive_ = mission_.update(gps_.position(), lastTarget_);
-        // AutoController steering goes here in Phase 6 — safe defaults for now
-        lastCommand_ = ActuatorCommand{};
-    } else {
-        // Failsafe
-        manual_.reset();
-        lastCommand_      = ActuatorCommand{};
-        lastTargetActive_ = false;
+        if (lastTargetActive_) {
+            lastCommand_ = autoCtrl_.compute(
+                windDeg_, gps_.position(), lastTarget_,
+                lastCommand_.sailUs, lastCommand_.rotorUs);
+        } else {
+            autoCtrl_.reset();
+            lastCommand_ = ActuatorCommand{};
+        }
     }
 
     actuators_.write(lastCommand_);
@@ -149,10 +151,17 @@ void DroneApp::debugTick() {
         lora_.lastRxRssi(),
         loraRadio_.ready() ? "" : "  [NOT INIT]");
 
-    if (activeMode_ == ControlMode::Automatic) {
+    if (activeMode_ == ControlMode::Automatic ||
+        activeMode_ == ControlMode::Failsafe) {
         static const char* stateNames[] = { "IDLE", "RUNNING", "RETURNING", "COMPLETE" };
         const char* mName = (mission_.mode() == MissionMode::Circuit) ? "CIRCUIT" : "LINEAR ";
         const uint8_t s = static_cast<uint8_t>(mission_.state());
+
+        Serial.printf("[AUTO ] wind=%.0f°%s  nav=%s  %s\n",
+            windDeg_,
+            windDeg_ == 0.0f ? " (!send wind-command before navigate!)" : "",
+            autoCtrl_.navMode(),
+            autoCtrl_.navMessage());
 
         if (lastTargetActive_ && gp.valid) {
             const float dist    = Navigator::distanceM(gp.lat, gp.lon, lastTarget_.lat, lastTarget_.lon);
@@ -180,6 +189,7 @@ void DroneApp::loraHbTick() {
         gp.lat, gp.lon, gp.courseDeg,
         lastBatVolts_,
         mission_.currentIndex(),
-        mission_.waypointCount()
+        mission_.waypointCount(),
+        windDeg_
     );
 }

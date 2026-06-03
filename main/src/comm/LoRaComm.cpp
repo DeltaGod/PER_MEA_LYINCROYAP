@@ -20,11 +20,12 @@ void LoRaComm::update() {
 
 void LoRaComm::sendHeartbeat(ControlMode mode, MissionState mState,
                               double lat, double lon, float heading,
-                              float batVolts, uint8_t wptCur, uint8_t wptTotal) {
+                              float batVolts, uint8_t wptCur, uint8_t wptTotal,
+                              float windDeg) {
     const char* modeStr;
     const char* ctrlMode;
 
-    if (mode == ControlMode::Automatic) {
+    if (mode == ControlMode::Automatic || mode == ControlMode::Failsafe) {
         ctrlMode = "autonomous";
         modeStr  = (mState == MissionState::Running || mState == MissionState::Returning)
                    ? "navigate" : "route-ready";
@@ -41,11 +42,11 @@ void LoRaComm::sendHeartbeat(ControlMode mode, MissionState mState,
         "\"servos\":{\"sail\":0,\"rudder\":0},"
         "\"control_mode\":\"%s\","
         "\"heading\":%.1f,"
-        "\"wind\":0,"
+        "\"wind\":%.0f,"
         "\"bat\":%.2f,"
         "\"waypoints\":{\"total\":%u,\"current\":%u}"
         "}}",
-        modeStr, lat, lon, ctrlMode, heading, batVolts,
+        modeStr, lat, lon, ctrlMode, heading, windDeg, batVolts,
         (unsigned)wptTotal, (unsigned)wptCur);
 
     if (!radio_) return;
@@ -133,8 +134,9 @@ void LoRaComm::handleWaypoints(const char* msg) {
 void LoRaComm::handleWindCommand(const char* msg) {
     const char* valPtr = strstr(msg, "\"value\":");
     if (!valPtr) return;
-    int windDeg = atoi(valPtr + 8);
-    Serial.printf("[LORA] CMD: wind-command %d° (stored for Phase 5)\n", windDeg);
+    float windDeg = (float)atoi(valPtr + 8);
+    app_->setWindDirection(windDeg);
+    Serial.printf("[LORA] CMD: wind-command %.0f°\n", windDeg);
 }
 
 void LoRaComm::handleHome(const char* msg) {

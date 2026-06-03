@@ -7,6 +7,7 @@
 #include "../comm/LoRaComm.h"
 #include "../control/ModeManager.h"
 #include "../control/ManualController.h"
+#include "../control/AutoController.h"
 #include "../navigation/MissionManager.h"
 #include "../core/Types.h"
 
@@ -22,6 +23,7 @@ public:
     void startMission()                        { mission_.start(); }
     void stopMission()                         { mission_.stop(); }
     void emergencyReturn()                     { mission_.emergencyReturn(); }
+    void setWindDirection(float deg)           { windDeg_ = deg; }
 
 private:
     RcReceiver       rc_;
@@ -32,6 +34,7 @@ private:
     LoRaComm         lora_;
     ModeManager      modeManager_;
     ManualController manual_;
+    AutoController   autoCtrl_;
     MissionManager   mission_;
 
     RcFrame         lastFrame_;
@@ -41,6 +44,7 @@ private:
     ControlMode     activeMode_       = ControlMode::Failsafe;
     ControlMode     prevMode_         = ControlMode::Failsafe;
     float           lastBatVolts_     = 0.0f;
+    float           windDeg_          = 0.0f;
     uint32_t        lastGpsChars_     = 0;
     uint32_t        lastControlMs_    = 0;
     uint32_t        lastBatMs_        = 0;
