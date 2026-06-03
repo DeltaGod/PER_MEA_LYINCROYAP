@@ -26,4 +26,15 @@ private:
     char          completedLine_[96] = {};
     uint8_t       lineLen_           = 0;
     bool          prevValid_         = false;  // tracks fix state for change detection
+
+    // Kalman filter state for noise reduction
+    static constexpr float KALMAN_PROCESS_VAR    = 1e-6f;  // process noise
+    static constexpr float KALMAN_MEASURE_VAR    = 1e-8f;  // measurement noise
+    double kalman_lat_estimate = 0.0;
+    double kalman_lon_estimate = 0.0;
+    float  kalman_lat_p_error  = 1.0f;  // estimation error
+    float  kalman_lon_p_error  = 1.0f;
+
+    // Apply 1D Kalman filter to reduce GPS noise
+    double applyKalmanFilter(double z, double& estimate, float& p_error, float q, float r);
 };

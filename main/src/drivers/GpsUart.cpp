@@ -63,6 +63,24 @@ uint8_t GpsUart::satsInView() {
     return gsvTotal_.isValid() ? (uint8_t)atoi(gsvTotal_.value()) : 0;
 }
 
+// Apply 1D Kalman filter: reduces random measurement noise
+// z = measurement (raw GPS value)
+// estimate = current state estimate (will be updated)
+// p_error = estimation error covariance (will be updated)
+// q = process noise variance
+// r = measurement noise variance
+double GpsUart::applyKalmanFilter(double z, double& estimate, float& p_error, float q, float r) {
+    // Prediction step
+    float p_pred = p_error + q;  // predicted error covariance
+
+    // Update step
+    float kalman_gain = p_pred / (p_pred + r);  // Kalman gain
+    estimate += kalman_gain * (z - estimate);    // update estimate
+    p_error = (1.0f - kalman_gain) * p_pred;     // update error covariance
+
+    return estimate;
+}
+
 void GpsUart::update() {
     while (Serial1.available()) {
         char c = Serial1.read();
@@ -92,8 +110,18 @@ void GpsUart::update() {
     prevValid_ = nowValid;
 
     pos_.valid      = nowValid;
-    pos_.lat        = nowValid ? gps_.location.lat()           : 0.0;
-    pos_.lon        = nowValid ? gps_.location.lng()           : 0.0;
+
+    // Apply Kalman filter to latitude and longitude to reduce GPS noise
+    if (nowValid) {
+        pos_.lat = applyKalmanFilter(gps_.location.lat(), kalman_lat_estimate,
+                                     kalman_lat_p_error, KALMAN_PROCESS_VAR, KALMAN_MEASURE_VAR);
+        pos_.lon = applyKalmanFilter(gps_.location.lng(), kalman_lon_estimate,
+                                     kalman_lon_p_error, KALMAN_PROCESS_VAR, KALMAN_MEASURE_VAR);
+    } else {
+        pos_.lat = 0.0;
+        pos_.lon = 0.0;
+    }
+
     pos_.speedKmph  = gps_.speed.isValid()      ? (float)gps_.speed.kmph()    : 0.0f;
     pos_.courseDeg  = gps_.course.isValid()     ? (float)gps_.course.deg()    : 0.0f;
     pos_.satellites = gps_.satellites.isValid() ? (uint8_t)gps_.satellites.value() : 0;
