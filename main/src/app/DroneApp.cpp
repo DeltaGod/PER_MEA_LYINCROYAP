@@ -192,6 +192,8 @@ void DroneApp::loraHbTick() {
         lastBatVolts_,
         mission_.currentIndex(),
         mission_.waypointCount(),
-        windDeg_
+        windDeg_,
+        lastCommand_.sailUs,
+        lastCommand_.rotorUs
     );
 }

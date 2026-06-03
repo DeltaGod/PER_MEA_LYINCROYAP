@@ -3,6 +3,7 @@
 #include "../app/DroneApp.h"
 #include "../navigation/MissionPlan.h"
 #include "../config/DebugConfig.h"
+#include "../config/Calibration.h"
 
 void LoRaComm::begin(LoRaRadio& radio, DroneApp& app) {
     radio_ = &radio;
@@ -21,7 +22,7 @@ void LoRaComm::update() {
 void LoRaComm::sendHeartbeat(ControlMode mode, MissionState mState,
                               double lat, double lon, float heading,
                               float batVolts, uint8_t wptCur, uint8_t wptTotal,
-                              float windDeg) {
+                              float windDeg, uint16_t sailUs, uint16_t rotorUs) {
     const char* modeStr;
     const char* ctrlMode;
 
@@ -34,19 +35,30 @@ void LoRaComm::sendHeartbeat(ControlMode mode, MissionState mState,
         modeStr  = "standby";
     }
 
+    // Sail: binaire ±10° selon position par rapport au centre
+    const int8_t sailDeg = (sailUs >= Calibration::SAIL_CENTER_US) ? 10 : -10;
+
+    // Rotor: interpolation linéaire (ROTOR_MIN_US–ROTOR_MAX_US) → (-180°–+180°)
+    const int16_t rotorDeg = (int16_t)(
+        -180.0f + (float)(rotorUs - Calibration::ROTOR_MIN_US)
+        / (float)(Calibration::ROTOR_MAX_US - Calibration::ROTOR_MIN_US)
+        * 360.0f
+    );
+
     char buf[256];
     snprintf(buf, sizeof(buf),
         "{\"origin\":\"boat\",\"type\":\"info\",\"message\":{"
         "\"mode\":\"%s\","
         "\"location\":[%.6f,%.6f],"
-        "\"servos\":{\"sail\":0,\"rudder\":0},"
+        "\"servos\":{\"sail\":%d,\"rudder\":%d},"
         "\"control_mode\":\"%s\","
         "\"heading\":%.1f,"
         "\"wind\":%.0f,"
         "\"bat\":%.2f,"
         "\"waypoints\":{\"total\":%u,\"current\":%u}"
         "}}",
-        modeStr, lat, lon, ctrlMode, heading, windDeg, batVolts,
+        modeStr, lat, lon, (int)sailDeg, (int)rotorDeg,
+        ctrlMode, heading, windDeg, batVolts,
         (unsigned)wptTotal, (unsigned)wptCur);
 
     if (!radio_) return;
