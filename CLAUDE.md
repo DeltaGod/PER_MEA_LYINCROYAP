@@ -79,7 +79,10 @@ The drone is a sail-powered surface vehicle. The key mechanics:
 ### Calibration values (from `Calibration.h` — Post-Claude)
 - Sail servo center: **1520 µs** (Futaba S3003 standard)
 - Sail servo ±10° positions: SAIL_PLUS_US=1575, SAIL_MINUS_US=1465 — **NEEDS BENCH CALIBRATION**
-- Rotor servo: 1000–2000 µs, center 1500 µs (hold position), deadband ±35 µs
+- Rotor servo: **limited to ±180°** → ROTOR_MIN_US=1417, ROTOR_MAX_US=1583, center 1500 µs, deadband ±35 µs
+  - Full hardware range is 1000–2000 µs (±3 turns = ±1080°), limited to ±83 µs from center for controllability
+  - Derivation: 500 µs/turn×(1/3)turn/360° → 2.16°/µs → 180°=83 µs
+- CH4 measured travel: CH4_MIN_US=1180, CH4_MAX_US=1790 (center ~1500 µs) — maps to ROTOR_MIN/MAX
 - ESC: 1000 µs (stop) to 2000 µs (full throttle)
 - ESC arming requires holding throttle at ≤**1300** µs for 2 seconds (PTR-6A minimum stick = ~1265 µs)
 - Slew rate limit: 30 µs/tick (prevents hard jerks on actuator changes)
@@ -233,6 +236,17 @@ Mode mapping: Failsafe/Manual → `"standby"`, Auto+Idle/Complete → `"route-re
 ---
 
 ## 6. Current Implementation Status
+
+### Post-Claude Phase 0 — IHM Ground Station (pre-existing, adapted)
+
+| Module | File | Status | Notes |
+|---|---|---|---|
+| `webserver.py` | `IHM_Facu_essay_Version/app/webserver.py` | ✅ | FastAPI, port 5000, sirve HTML estático |
+| `serial_link.py` | `IHM_Facu_essay_Version/app/serial_link.py` | ✅ | Lee/escribe JSON por serial, MongoDB como bus |
+| `start_ihm.sh` | `IHM_Facu_essay_Version/start_ihm.sh` | ✅ | Arranca MongoDB Docker + serial_link + webserver + browser |
+| `stop_ihm.sh` | `IHM_Facu_essay_Version/stop_ihm.sh` | ✅ | Para todos los procesos IHM rápidamente |
+
+**Nota:** `routes/messages.py` tiene `BASE_DIR` hardcodeado a `/home/ewen/...` — actualizar para cada máquina.
 
 ### Post-Claude Phase 1 — Manual RC Control ✅ COMPLETE (106/106 tests pass)
 
@@ -521,6 +535,10 @@ The Arduino IDE only compiles `.cpp` files that are in the same folder as the `.
 | 2026-05-20 | GPS external antenna debug — Taoglas ADFGP.25A connected to T-Beam u.FL, no fix outdoors. Diagnosed via serial: `chars=10` frozen (vs thousands expected) = GPS outputting zero NMEA. Root cause: a prior session had saved a CFG-PRT config to the NEO-6M's internal flash that disabled NMEA output. GPS was alive (ACKed UBX commands — those 10 bytes = one UBX ACK-ACK frame) but silent. Fix 1: UBX CFG-CFG factory reset (clearMask=0x1F, loadMask=0x1F, deviceMask=0x17) wipes the saved flash config and restores ROM defaults including NMEA at 9600 baud. Fix 2: UBX CFG-ANT (flags=0x001B) enables the antenna supervisor: provides DC bias voltage through coax to power the Taoglas active LNA, and asserts ANT_FLAG to switch the T-Beam RF switch from internal ceramic patch to external u.FL. Both commands sent in GpsUart::begin() on every boot. Result: NMEA restored, fix acquired outdoors in <60 s, 7 satellites, hdop=2.2, position 48.360476 −4.566822 (Brest area). |
 | 2026-05-24 | PCB V2 hardware adaptation — all 13 source files updated to match final PCB V2 pin mapping: CH2=GPIO39, CH3=GPIO14, CH4=GPIO13, CH5=GPIO4, ESC1=GPIO15, BatADC=GPIO36, LoRa RST=GPIO23. CH6 and ESC2 removed entirely. Wire.end() removed from AxpPower (I2C stays persistent, GPIO21/22 free for sensors). BatteryAdc driver added (R5=562kΩ/R6=120kΩ, GPIO36, 11dB attenuation). ESC_ARM_MAX_US raised to 1300 µs (PTR-6A stick minimum ≈1265 µs). Clean compile: 27% flash, 7% RAM. |
 | 2026-05-24 | Technical report — created `docs/rapport_projet.tex` (29 pages, French, pdflatex). Covers all phases, problems and solutions, hardware specs, PCB V1/V2 changes, code architecture, development journal. Compiled to `rapport_projet.pdf`. |
+| 2026-06-03 | IHM read-through — `IHM_Facu_essay_Version/` documented: FastAPI + MongoDB + serial_link.py stack. Added `stop_ihm.sh` to kill all IHM processes quickly. |
+| 2026-06-03 | DebugConfig.h rewrite — master switch `DEBUG_ENABLED` + 9 per-section flags (DEBUG_RADIO off by default). All source files migrated from generic `DBG("TAG",...)` to typed macros `DBG_RADIO()`, `DBG_GPS()`, etc. Raw `Serial.printf("[LORA]")` in LoRaComm/DroneApp also migrated. Boot-time `[LORA] OK/ERROR` prints kept unconditional. |
+| 2026-06-03 | Rotor servo range limited to ±180° — Regatta ECO II full range (1000–2000 µs = ±1080°) too difficult to control manually. New values: ROTOR_MIN_US=1417, ROTOR_MAX_US=1583 (±83 µs from center = ±180°, derived from 2.16°/µs). CH4 real travel (1180–1790 µs) added as CH4_MIN_US/CH4_MAX_US in BoardConfig.h. ManualController updated to map CH4 range to new rotor range. |
+| 2026-06-03 | T-Beam power issue diagnosed — PCB V2 feeds T-Beam via +5V expansion header pin (Pololu 2866 output). Pin is on USB VBUS path after protection diode, so AXP192 doesn't always start reliably without LiPo on JST. Workaround: cut USB-A→USB-C cable, solder USB-A end to Pololu +5V/GND, plug USB-C into T-Beam. Boot via USB-C is the correct AXP192 VBUS input. |
 
 ---
 
@@ -528,7 +546,7 @@ The Arduino IDE only compiles `.cpp` files that are in the same folder as the `.
 
 ### ManualController — ManualServo mode
 - **CH2 → sail (binary):** center deadband ±35 µs. First frame initializes sail state from stick position to avoid snap on mode entry. Inside deadband: hold last state.
-- **CH4 → rotor (positional):** stick position maps linearly to rotor target position (ROTOR_MIN_US–ROTOR_MAX_US). Deadband ±35 µs around center snaps to ROTOR_CENTER_US (1500). The Regatta ECO II holds its position, so the operator moves the stick to set the desired rotor angle and releases — no need to hold.
+- **CH4 → rotor (positional):** CH4 measured range 1180–1790 µs maps to ROTOR_MIN_US–ROTOR_MAX_US (1417–1583 µs = ±180°). Deadband ±35 µs around center snaps to ROTOR_CENTER_US (1500). The Regatta ECO II holds its position. Full hardware range (1000–2000 µs = ±1080°) deliberately not used — limited to ±180° for controllability.
 
 ### ManualController — ManualProp mode
 - **Arming:** CH3 must stay ≤ **1300** µs for 2 continuous seconds (PTR-6A stick minimum is ~1265 µs — old 1050 µs threshold was never reachable). Serial prints `[hold throttle low to ARM]` while waiting.
