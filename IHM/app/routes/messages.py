@@ -547,6 +547,15 @@ def send_restart():
     return push_command_to_boat({"restart": True})
 
 
+@router.get("/stop")
+def send_stop():
+    """
+    Stoppe la mission en cours.
+    """
+
+    return push_command_to_boat({"stop": True})
+
+
 # ============================================================
 # API : lancement simulation / liaison série
 # ============================================================
