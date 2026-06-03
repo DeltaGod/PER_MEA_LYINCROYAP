@@ -1,0 +1,7 @@
+{"origin":"server","type":"command","message":{"waypoints":{"number":3,"points":"-4.56605584966664,48.35455765451263,-4.564768865781673,48.352225168303676,-4.55938693317259,48.3535469235982"}}}
+{"origin":"server","type":"command","message":"navigate"}
+{"origin":"server","type":"command","message":"restart"}
+{"origin":"server","type":"command","message":"wind-observation"}
+{"origin":"server","type":"command","message":{"wind-command":{"value":"299"}}}
+
+{"origin":"server","type":"command","message":{"waypoints":{"number":4,"points":"-4.615620180271975,48.4312531844447,-4.614878252245433,48.431514472313296,-4.614102081386562,48.43134028055039,-4.616133822751635,48.43123803728071"}}}

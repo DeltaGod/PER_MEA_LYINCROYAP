@@ -1,0 +1,332 @@
+console.log("map.js chargé");
+
+// ============================================================
+// Configuration
+// ============================================================
+
+const API_BASE = "/api";
+const DEFAULT_WAYPOINT_RADIUS_M = 5.0;
+
+const state = {
+    map: null,
+    waypoints: [],
+    waypointMarkers: [],
+    routeLine: null
+};
+
+
+// ============================================================
+// Initialisation générale
+// ============================================================
+
+document.addEventListener("DOMContentLoaded", () => {
+    console.log("DOM chargé");
+
+    initMap();
+    bindUiEvents();
+});
+
+
+// ============================================================
+// Initialisation carte Leaflet
+// ============================================================
+
+function initMap() {
+    const mapContainer = document.getElementById("map");
+
+    if (!mapContainer) {
+        console.error("Erreur : élément HTML #map introuvable.");
+        return;
+    }
+
+    if (typeof L === "undefined") {
+        console.error("Erreur : Leaflet n'est pas chargé.");
+        return;
+    }
+    
+
+    state.map = L.map("map").setView([48.360687, -4.565710], 17);
+    window.autoboatMap = state.map;
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: "&copy; OpenStreetMap contributors"
+    }).addTo(state.map);
+
+    state.map.on("click", (event) => {
+        addWaypoint(
+            event.latlng.lat,
+            event.latlng.lng,
+            DEFAULT_WAYPOINT_RADIUS_M
+        );
+    });
+
+    console.log("Carte Leaflet initialisée");
+}
+
+
+// ============================================================
+// addEventListener sur les boutons HTML
+// ============================================================
+
+function bindUiEvents() {
+    const sendRouteBtn = document.getElementById("send-route-btn");
+    const clearRouteBtn = document.getElementById("clear-route-btn");
+
+    if (sendRouteBtn) {
+        sendRouteBtn.addEventListener("click", sendRouteToBoat);
+    } else {
+        console.warn("Bouton #send-route-btn introuvable.");
+    }
+
+    if (clearRouteBtn) {
+        clearRouteBtn.addEventListener("click", clearRoute);
+    } else {
+        console.warn("Bouton #clear-route-btn introuvable.");
+    }
+
+    console.log("Événements UI connectés");
+}
+
+
+// ============================================================
+// Gestion des waypoints
+// ============================================================
+
+function addWaypoint(lat, lon, radiusM = DEFAULT_WAYPOINT_RADIUS_M) {
+    const waypoint = {
+        lat: lat,
+        lon: lon,
+        radius_m: radiusM
+    };
+
+    state.waypoints.push(waypoint);
+
+    updateRouteDisplay();
+    updateWaypointList();
+
+    console.log("Waypoint ajouté :", waypoint);
+}
+
+
+function removeWaypoint(index) {
+    if (index < 0 || index >= state.waypoints.length) {
+        console.warn("Index waypoint invalide :", index);
+        return;
+    }
+
+    state.waypoints.splice(index, 1);
+
+    updateRouteDisplay();
+    updateWaypointList();
+}
+
+
+function clearRoute() {
+    state.waypoints = [];
+
+    clearMapRouteDisplay();
+    updateWaypointList();
+
+    console.log("Route effacée");
+}
+
+
+// ============================================================
+// Affichage carte
+// ============================================================
+
+function updateRouteDisplay() {
+    if (!state.map) {
+        console.error("Carte non initialisée.");
+        return;
+    }
+
+    clearMapRouteDisplay();
+
+    state.waypoints.forEach((waypoint, index) => {
+        const marker = L.marker([waypoint.lat, waypoint.lon])
+            .addTo(state.map)
+            .bindPopup(`
+                <strong>Waypoint ${index + 1}</strong><br>
+                Lat : ${waypoint.lat.toFixed(8)}<br>
+                Lon : ${waypoint.lon.toFixed(8)}<br>
+                Rayon : ${waypoint.radius_m.toFixed(1)} m
+            `);
+
+        state.waypointMarkers.push(marker);
+    });
+
+    if (state.waypoints.length >= 2) {
+        const coordinates = state.waypoints.map((wp) => [wp.lat, wp.lon]);
+
+        state.routeLine = L.polyline(coordinates, {
+            weight: 4
+        }).addTo(state.map);
+    }
+}
+
+
+function clearMapRouteDisplay() {
+    if (!state.map) {
+        return;
+    }
+
+    state.waypointMarkers.forEach((marker) => {
+        state.map.removeLayer(marker);
+    });
+
+    state.waypointMarkers = [];
+
+    if (state.routeLine !== null) {
+        state.map.removeLayer(state.routeLine);
+        state.routeLine = null;
+    }
+}
+
+
+// ============================================================
+// Liste HTML des waypoints
+// ============================================================
+
+function updateWaypointList() {
+    const list = document.getElementById("waypoints-list");
+
+    if (!list) {
+        return;
+    }
+
+    list.innerHTML = "";
+
+    state.waypoints.forEach((waypoint, index) => {
+        const item = document.createElement("li");
+
+        const text = document.createElement("span");
+        text.textContent =
+            `WP${index + 1} : lat=${waypoint.lat.toFixed(6)}, ` +
+            `lon=${waypoint.lon.toFixed(6)}, ` +
+            `rayon=${waypoint.radius_m.toFixed(1)} m `;
+
+        const deleteButton = document.createElement("button");
+        deleteButton.textContent = "Supprimer";
+        deleteButton.addEventListener("click", () => {
+            removeWaypoint(index);
+        });
+
+        item.appendChild(text);
+        item.appendChild(deleteButton);
+
+        list.appendChild(item);
+    });
+}
+
+
+// ============================================================
+// Communication backend
+// ============================================================
+
+async function sendRouteToBoat() {
+    if (state.waypoints.length === 0) {
+        alert("Aucun waypoint à envoyer.");
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/send-route`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                waypoints: state.waypoints
+            })
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            console.error("Erreur backend :", result);
+            alert("Erreur lors de l'envoi de la route.");
+            return;
+        }
+
+        console.log("Route envoyée :", result);
+        alert("Route envoyée au bateau.");
+
+    } catch (error) {
+        console.error("Erreur réseau :", error);
+        alert("Impossible de contacter le serveur.");
+    }
+}
+
+
+async function startNavigation() {
+    try {
+        const response = await fetch(`${API_BASE}/navigate`, {
+            method: "GET"
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            console.error("Erreur backend :", result);
+            alert("Erreur lors du démarrage de la navigation.");
+            return;
+        }
+
+        console.log("Navigation démarrée :", result);
+        alert("Navigation démarrée.");
+
+    } catch (error) {
+        console.error("Erreur réseau :", error);
+        alert("Impossible de démarrer la navigation.");
+    }
+}
+
+
+async function startSystem() {
+    try {
+        const response = await fetch(`${API_BASE}/start`, {
+            method: "POST"
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            console.error("Erreur start :", result);
+            alert("Erreur lors du lancement système.");
+            return;
+        }
+
+        console.log("Start OK :", result);
+        alert("Système lancé.");
+
+    } catch (error) {
+        console.error("Erreur réseau :", error);
+        alert("Impossible de lancer le système.");
+    }
+}
+
+
+async function restartBoat() {
+    try {
+        const response = await fetch(`${API_BASE}/restart`, {
+            method: "GET"
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+            console.error("Erreur restart :", result);
+            alert("Erreur lors du redémarrage bateau.");
+            return;
+        }
+
+        console.log("Restart envoyé :", result);
+        alert("Commande restart envoyée.");
+
+    } catch (error) {
+        console.error("Erreur réseau :", error);
+        alert("Impossible de redémarrer le bateau.");
+    }
+}
