@@ -102,15 +102,24 @@ void DroneApp::controlTick(uint32_t nowMs) {
         activeMode_ == ControlMode::ManualProp) {
         lastCommand_ = manual_.update(lastFrame_, activeMode_, nowMs);
         lastTargetActive_ = false;
+    } else if (windObsActive_) {
+        // Wind-observation maneuver: sail a fixed tack and infer wind from GPS track
+        manual_.reset();
+        lastTargetActive_ = false;
+        lastCommand_ = autoCtrl_.observeWind(gps_.position());
+        if (autoCtrl_.windObsComplete()) {
+            windDeg_       = autoCtrl_.observedWindDeg();
+            windValid_     = true;
+            windObsActive_ = false;
+        }
     } else {
         // Automatic OR Failsafe (RC lost) — both follow LoRa mission
         manual_.reset();
         lastTargetActive_ = mission_.update(gps_.position(), lastTarget_);
-        if (lastTargetActive_) {
-            lastCommand_ = autoCtrl_.compute(
-                windDeg_, gps_.position(), lastTarget_,
-                lastCommand_.sailUs, lastCommand_.rotorUs);
+        if (lastTargetActive_ && windValid_) {
+            lastCommand_ = autoCtrl_.compute(windDeg_, gps_.position(), lastTarget_);
         } else {
+            // No active target, or wind not yet known → hold safe neutral
             autoCtrl_.reset();
             lastCommand_ = ActuatorCommand{};
         }
@@ -161,7 +170,8 @@ void DroneApp::debugTick() {
 
         Serial.printf("[AUTO ] wind=%.0f°%s  nav=%s  %s\n",
             windDeg_,
-            windDeg_ == 0.0f ? " (!send wind-command before navigate!)" : "",
+            windObsActive_ ? " (observing...)"
+                           : (!windValid_ ? " (!set wind: wind-command or wind-observation before navigate!)" : ""),
             autoCtrl_.navMode(),
             autoCtrl_.navMessage());
 

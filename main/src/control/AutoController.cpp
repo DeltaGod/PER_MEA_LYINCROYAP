@@ -1,25 +1,37 @@
 #include "AutoController.h"
 #include "../navigation/Navigator.h"
 #include "../config/Calibration.h"
+#include <math.h>
+
+// Sail is binary ±10° → two discrete µs positions.
+uint16_t AutoController::sailToUs(float sailAngleDeg) {
+    return (sailAngleDeg >= 0.0f) ? Calibration::SAIL_PLUS_US
+                                  : Calibration::SAIL_MINUS_US;
+}
+
+// Map the navigation rudder command (±NAV_RUDDER_LIMIT_DEG) onto the full
+// physical Safran travel (ROTOR_MIN_US..ROTOR_MAX_US = ±90° = ±83 µs).
+// So a full-scale rudder command uses the full available winch deflection.
+uint16_t AutoController::rudderToUs(float rudderAngleDeg) {
+    const float usPerDeg =
+        (float)(Calibration::ROTOR_MAX_US - Calibration::ROTOR_CENTER_US)
+        / (float)NAV_RUDDER_LIMIT_DEG;
+    int32_t us = (int32_t)Calibration::ROTOR_CENTER_US
+               + (int32_t)lroundf(rudderAngleDeg * usPerDeg);
+    if (us < (int32_t)Calibration::ROTOR_MIN_US) us = Calibration::ROTOR_MIN_US;
+    if (us > (int32_t)Calibration::ROTOR_MAX_US) us = Calibration::ROTOR_MAX_US;
+    return (uint16_t)us;
+}
 
 ActuatorCommand AutoController::compute(float windDeg,
-                                        const GpsPosition& pos,
-                                        const Waypoint& target,
-                                        uint16_t currentSailUs,
-                                        uint16_t currentRotorUs) {
-    ActuatorCommand cmd{};  // safe defaults if we bail early
+                                       const GpsPosition& pos,
+                                       const Waypoint& target) {
+    ActuatorCommand cmd{};  // safe neutral defaults if we bail early
 
     if (!pos.valid) return cmd;
 
     float dist    = Navigator::distanceM(pos.lat, pos.lon, target.lat, target.lon);
     float bearing = Navigator::bearingDeg(pos.lat, pos.lon, target.lat, target.lon);
-
-    // Reconstruct algorithm's angle representation from current µs outputs
-    float curSailAngle   = (currentSailUs >= Calibration::SAIL_CENTER_US)
-                           ? (float)NAV_SAIL_RIGHT_DEG
-                           : (float)NAV_SAIL_LEFT_DEG;
-    float curRudderAngle = ((float)currentRotorUs - (float)Calibration::ROTOR_CENTER_US)
-                           / 25.0f;
 
     NavResult r = nav_handleNavigationWithState(
         state_,
@@ -27,33 +39,84 @@ ActuatorCommand AutoController::compute(float windDeg,
         (double)bearing,
         (double)dist,
         (double)windDeg,
-        curSailAngle,
-        curRudderAngle,
+        sailAngle_,              // persisted navigation state (not reconstructed from µs)
+        rudderAngle_,
         (double)target.radiusM,
         pos.lat, pos.lon,
         target.lat, target.lon,
         NAV_DEFAULT_CORRIDOR_HALF_WIDTH_M
     );
 
-    navMode_    = r.mode    ? r.mode    : "?";
+    navMode_    = r.mode       ? r.mode       : "?";
     navMessage_ = r.logMessage ? r.logMessage : "";
 
-    if (r.waypointReached) { navMode_ = "reached"; return cmd; }
+    if (r.waypointReached) {
+        navMode_     = "reached";
+        rudderAngle_ = 0.0f;     // recenter for the next leg
+        return cmd;
+    }
 
-    // Sail: binary ±10° → two discrete µs positions
-    cmd.sailUs = (r.sailAngle >= 0.0f) ? Calibration::SAIL_PLUS_US
-                                       : Calibration::SAIL_MINUS_US;
+    // Persist the algorithm's angle state for the next tick.
+    sailAngle_   = r.sailAngle;
+    rudderAngle_ = r.rudderAngle;
 
-    // Rudder: ±20° → 1000..2000 µs (25 µs/°, center 1500)
-    int32_t rotorUs = (int32_t)Calibration::ROTOR_CENTER_US
-                    + (int32_t)(r.rudderAngle * 25.0f);
-    if (rotorUs < Calibration::ROTOR_MIN_US) rotorUs = Calibration::ROTOR_MIN_US;
-    if (rotorUs > Calibration::ROTOR_MAX_US) rotorUs = Calibration::ROTOR_MAX_US;
-    cmd.rotorUs = (uint16_t)rotorUs;
-
+    cmd.sailUs  = sailToUs(sailAngle_);
+    cmd.rotorUs = rudderToUs(rudderAngle_);
     return cmd;
 }
 
 void AutoController::reset() {
     nav_resetState(state_);
+    rudderAngle_ = 0.0f;
+    sailAngle_   = 0.0f;
+}
+
+void AutoController::beginWindObservation() {
+    windObsComplete_ = false;
+    obsStarted_      = false;
+    observedWindDeg_ = 0.0f;
+    smoothHeading_   = 0.0f;
+    navMode_         = "wind-observation";
+    navMessage_      = "waiting for GPS fix...";
+}
+
+ActuatorCommand AutoController::observeWind(const GpsPosition& pos) {
+    ActuatorCommand cmd{};
+    // Fixed tack to make the boat sail; rudder centered so it runs free.
+    cmd.sailUs  = Calibration::SAIL_PLUS_US;
+    cmd.rotorUs = Calibration::ROTOR_CENTER_US;
+
+    if (!pos.valid) {
+        navMessage_ = "no GPS fix";
+        return cmd;
+    }
+
+    // Anchor the maneuver on the first valid fix.
+    if (!obsStarted_) {
+        obsStartLat_   = pos.lat;
+        obsStartLon_   = pos.lon;
+        smoothHeading_ = pos.courseDeg;
+        obsStarted_    = true;
+    } else {
+        // Circular exponential moving average of the GPS course.
+        float d = (float)nav_relativeAngle(smoothHeading_, pos.courseDeg);
+        smoothHeading_ = (float)nav_normalizeAngle(
+            smoothHeading_ + Calibration::WIND_OBS_SMOOTH_ALPHA * d);
+    }
+
+    double dist = Navigator::distanceM(obsStartLat_, obsStartLon_, pos.lat, pos.lon);
+
+    NavResult r = nav_handleWindObservation(
+        pos.lat, pos.lon, obsStartLat_, obsStartLon_,
+        (double)smoothHeading_, dist, (double)Calibration::WIND_OBS_DISTANCE_M,
+        (float)NAV_SAIL_RIGHT_DEG, 0.0f);   // observing on the +10° (starboard) tack
+
+    navMessage_ = r.logMessage ? r.logMessage : "observing wind...";
+
+    if (r.windAcquired) {
+        observedWindDeg_ = (float)r.acquiredWindDir;
+        windObsComplete_ = true;
+        navMode_         = "wind-acquired";
+    }
+    return cmd;
 }

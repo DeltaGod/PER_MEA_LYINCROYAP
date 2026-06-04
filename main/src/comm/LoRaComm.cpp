@@ -38,11 +38,11 @@ void LoRaComm::sendHeartbeat(ControlMode mode, MissionState mState,
     // Sail: binaire ±10° selon position par rapport au centre
     const int8_t sailDeg = (sailUs >= Calibration::SAIL_CENTER_US) ? 10 : -10;
 
-    // Rotor: interpolation linéaire (ROTOR_MIN_US–ROTOR_MAX_US) → (-180°–+180°)
+    // Rotor: interpolation linéaire (ROTOR_MIN_US–ROTOR_MAX_US) → (-90°–+90°)
     const int16_t rotorDeg = (int16_t)(
-        -180.0f + (float)(rotorUs - Calibration::ROTOR_MIN_US)
+        -Calibration::ROTOR_RANGE_DEG + (float)(rotorUs - Calibration::ROTOR_MIN_US)
         / (float)(Calibration::ROTOR_MAX_US - Calibration::ROTOR_MIN_US)
-        * 360.0f
+        * (2.0f * Calibration::ROTOR_RANGE_DEG)
     );
 
     char buf[256];
@@ -98,7 +98,8 @@ void LoRaComm::dispatch(const char* json) {
     } else if (strstr(msg, "\"home\"")) {
         handleHome(msg);
     } else if (strstr(msg, "\"wind-observation\"")) {
-        DBG_RADIO("CMD: wind-observation (Phase 5 — not yet implemented)");
+        app_->startWindObservation();
+        DBG_RADIO("CMD: wind-observation → start GPS-track wind estimation");
     } else if (strstr(msg, "\"restart\"")) {
         DBG_RADIO("CMD: restart");
         delay(100);

@@ -16,14 +16,17 @@ public:
     void begin();
     void update();
 
-    // --- Mission interface (will be called by LoRa command handler in Phase 3) ---
+    // --- Mission interface (called by the LoRa command handler) ---
     void loadMission(const MissionPlan& plan) { mission_.loadMission(plan); }
     void clearMission()                        { mission_.clearMission(); }
     void setHome(double lat, double lon)       { mission_.setHome(lat, lon); }
-    void startMission()                        { mission_.start(); }
-    void stopMission()                         { mission_.stop(); }
-    void emergencyReturn()                     { mission_.emergencyReturn(); }
-    void setWindDirection(float deg)           { windDeg_ = deg; }
+    void startMission()                        { windObsActive_ = false; mission_.start(); }
+    void stopMission()                         { windObsActive_ = false; mission_.stop(); }
+    void emergencyReturn()                     { windObsActive_ = false; mission_.emergencyReturn(); }
+
+    // Wind: set manually (wind-command) or estimated from the GPS track (wind-observation).
+    void setWindDirection(float deg)           { windDeg_ = deg; windValid_ = true; }
+    void startWindObservation()                { autoCtrl_.beginWindObservation(); windObsActive_ = true; }
 
 private:
     RcReceiver       rc_;
@@ -45,6 +48,8 @@ private:
     ControlMode     prevMode_         = ControlMode::Failsafe;
     float           lastBatVolts_     = 0.0f;
     float           windDeg_          = 0.0f;
+    bool            windValid_        = false;  // true once wind is set or estimated
+    bool            windObsActive_    = false;  // wind-observation maneuver in progress
     uint32_t        lastGpsChars_     = 0;
     uint32_t        lastControlMs_    = 0;
     uint32_t        lastBatMs_        = 0;
