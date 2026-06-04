@@ -18,13 +18,18 @@ static constexpr uint16_t SAIL_MINUS_US  = 1465;  // -10° (aileron deflection, 
 // Full hardware range: 1000–2000 µs = ±3 turns = ±1080°.
 // Limited here to the measured ±90° physical travel of the Safran linkage:
 //   1417 µs = -90° | 1500 µs = 0° | 1583 µs = +90°  (±83 µs from center)
-// This range was confirmed desirable on the bench. Auto-nav maps its rudder
-// command (±NAV_RUDDER_LIMIT_DEG) onto this full ±83 µs travel (see AutoController).
+// This is the full mechanical range used in manual mode (CH4 → rotor).
 static constexpr uint16_t ROTOR_CENTER_US = 1500;
 static constexpr uint16_t ROTOR_STOP_US   = ROTOR_CENTER_US;
 static constexpr uint16_t ROTOR_MIN_US    = 1417;  // -90°
 static constexpr uint16_t ROTOR_MAX_US    = 1583;  // +90°
 static constexpr float    ROTOR_RANGE_DEG = 90.0f; // physical half-travel for ROTOR_MIN/MAX
+
+// Autonomous navigation deliberately uses only a gentle slice of the winch
+// travel — the full ±90° proved far too aggressive for steering. The nav
+// rudder command (degrees) maps 1:1 onto physical winch degrees, clamped to
+// this limit. Tune here if the boat under/over-steers in auto mode.
+static constexpr float    ROTOR_AUTO_RANGE_DEG = 20.0f; // ±20° winch travel in auto
 
 // Pro-Tronik Black Fet ESCs
 static constexpr uint16_t ESC_STOP_US    = 1000;  // motor off

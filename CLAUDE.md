@@ -237,16 +237,17 @@ Mode mapping: Failsafe/Manual → `"standby"`, Auto+Idle/Complete → `"route-re
 
 ## 6. Current Implementation Status
 
-### Post-Claude Phase 0 — IHM Ground Station (pre-existing, adapted)
+### Post-Claude Phase 0 — IHM Ground Station (now at `IHM/`, unified into Post-Claude)
 
 | Module | File | Status | Notes |
 |---|---|---|---|
-| `webserver.py` | `IHM_Facu_essay_Version/app/webserver.py` | ✅ | FastAPI, port 5000, sirve HTML estático |
-| `serial_link.py` | `IHM_Facu_essay_Version/app/serial_link.py` | ✅ | Lee/escribe JSON por serial, MongoDB como bus |
-| `start_ihm.sh` | `IHM_Facu_essay_Version/start_ihm.sh` | ✅ | Arranca MongoDB Docker + serial_link + webserver + browser |
-| `stop_ihm.sh` | `IHM_Facu_essay_Version/stop_ihm.sh` | ✅ | Para todos los procesos IHM rápidamente |
+| `webserver.py` | `IHM/app/webserver.py` | ✅ | FastAPI, port 5000, sirve HTML estático |
+| `serial_link.py` | `IHM/app/serial_link.py` | ✅ | Lee/escribe JSON por serial, MongoDB como bus. Reenvía comandos en ráfaga 3× (anti-colisión LoRa half-duplex) |
+| `routes/messages.py` | `IHM/app/routes/messages.py` | ✅ | API REST. `BASE_DIR` ahora dinámico (`Path(__file__).parents[2]`) — ya NO hardcodeado a /home/ewen |
+| `static/map.js` + `script.js` | `IHM/app/static/` | ✅ | Leaflet: marcar waypoints con clic, enviar ruta, polling /api/messages 1 Hz |
+| `start_ihm.sh` / `stop_ihm.sh` | `IHM/` | ✅ | Arranca/para Mongo Docker + serial_link + webserver + browser. `start_ihm.sh /dev/ttyUSBx` fuerza puerto |
 
-**Nota:** `routes/messages.py` tiene `BASE_DIR` hardcodeado a `/home/ewen/...` — actualizar para cada máquina.
+**Notas IHM:** (1) El puerto del transceiver alterna entre ttyUSB0/ttyUSB1 al reconectar — verificar con `ls /dev/ttyUSB*` y pasar como argumento. (2) Faltan en la UI: botón **Stop** (endpoint /api/stop existe), botón **Home**. (3) Batería se muestra en voltios (firmware manda `bat`, no `%`). (4) En modo real NO usar el botón "Start" (lanza simulación).
 
 ### Post-Claude Phase 1 — Manual RC Control ✅ COMPLETE (106/106 tests pass)
 
@@ -284,16 +285,32 @@ GPS hardware notes: board requires LiPo battery for warm starts (without battery
 | `DroneApp` | `app/DroneApp.h/.cpp` | ✅ | loraHbTick() at 1 s, lora_.update() every loop, [LORA] debug line |
 | Transceiver | `transceiver/transceiver.ino` | ✅ | Ground station sketch — shorthand commands + raw JSON passthrough, tested on T-Beam |
 
+### Post-Claude Phase 5 — Wind Estimation from GPS ✅ CODED (untested on water)
+
+| Module | File | Status | Notes |
+|---|---|---|---|
+| `AutoController` (wind obs) | `control/AutoController.h/.cpp` | ✅ | `beginWindObservation()`/`observeWind()`: sails fixed +10° tack, circular-EMA smooths GPS course, after `WIND_OBS_DISTANCE_M`=30 m latches wind = smoothHeading+90° via `nav_handleWindObservation()` |
+| `DroneApp` | `app/DroneApp.h/.cpp` | ✅ | `windObsActive_`/`windValid_` flags; wind-observation cmd wired; nav holds neutral until wind known |
+
+⚠️ The +90° offset and 30 m threshold need field validation. Manual `wind-command` (Envoi vent) is the reliable fallback. **Observability gap:** heartbeat looks identical to idle during observation — can't tell from telemetry if it's running until `wind` changes after 30 m travel.
+
+### Post-Claude Phase 6 — Autonomous Sailing ✅ CODED (untested on water, no unit tests)
+
+| Module | File | Status | Notes |
+|---|---|---|---|
+| `navigation.h` | `navigation/navigation.h` | ✅ | Algorithm ported from github DeltaGod/PER_MEA_LYINCROYAP — upwind/downwind zigzag, gybe avoidance (empannage), cross-track corridor, lofer/abattre. **Do not change logic.** |
+| `AutoController` | `control/AutoController.h/.cpp` | ✅ | Wraps navigation.h; persists rudder/sail angle state; maps nav rudder **1:1 to physical winch degrees, clamped ±ROTOR_AUTO_RANGE_DEG=20°** (full ±90° was too aggressive) |
+| `DroneApp` | `app/DroneApp.h/.cpp` | ✅ | controlTick dispatches to AutoController in Automatic+Failsafe when target active & wind valid |
+
 ### Post_GPT (reference only — do not modify)
 
 | Module | Status |
 |---|---|
 | `RcReceiver`, `McpwmActuators`, `ModeManager`, `ManualController` | ✅ Working — adopted as reference |
 | `Navigator`, `MissionPlan`, `MissionManager` | ✅ Working — ported to Post-Claude Phase 2 |
-| `Storage`, `SensorBus`, `WindEstimator`, `SailAutoMode` | ⚠️ Placeholders — to be implemented in Post-Claude |
 
-### Phases not yet started
-Sensors (Phase 4), Wind Estimator (Phase 5), Autonomous Sailing (Phase 6), Full Mission (Phase 7).
+### Phases not yet started (deliberately deferred per scope decision)
+Sensors / `SensorBus` (Phase 4), Storage/Logging + Autonomous Propulsion + WinchTracker + Full Mission (Phase 7). Also pending: unit tests for navigation/AutoController, bench calibration of SAIL_PLUS/MINUS_US and rudder gains.
 
 ---
 
@@ -540,6 +557,8 @@ The Arduino IDE only compiles `.cpp` files that are in the same folder as the `.
 | 2026-06-03 | Rotor servo range limited to ±180° — Regatta ECO II full range (1000–2000 µs = ±1080°) too difficult to control manually. New values: ROTOR_MIN_US=1417, ROTOR_MAX_US=1583 (±83 µs from center = ±180°, derived from 2.16°/µs). CH4 real travel (1180–1790 µs) added as CH4_MIN_US/CH4_MAX_US in BoardConfig.h. ManualController updated to map CH4 range to new rotor range. |
 | 2026-06-03 | T-Beam power issue diagnosed — PCB V2 feeds T-Beam via +5V expansion header pin (Pololu 2866 output). Pin is on USB VBUS path after protection diode, so AXP192 doesn't always start reliably without LiPo on JST. Workaround: cut USB-A→USB-C cable, solder USB-A end to Pololu +5V/GND, plug USB-C into T-Beam. Boot via USB-C is the correct AXP192 VBUS input. |
 | 2026-06-04 | Autonomous-sailing prep for general test (4 fixes). (1) **Rotor range corrected to ±90°** (was mislabeled ±180° in Calibration.h/heartbeat): ROTOR_MIN/MAX=1417/1583 = physical ±90°, added ROTOR_RANGE_DEG=90. (2) **AutoController rudder mapping fixed** — was 25 µs/° (assumed full 1000–2000 µs range) causing saturation past ~3.3°; now maps nav rudder ±NAV_RUDDER_LIMIT_DEG (±20°) onto the full ±83 µs travel (≈4.15 µs/°). (3) **Persistent nav state** — AutoController now keeps rudderAngle_/sailAngle_ as members instead of reconstructing from clamped µs each tick (the lofer/abattre integrator depends on it); compute() signature dropped the currentSailUs/currentRotorUs params, DroneApp call site updated. (4) **Wind handling** — windValid_ flag (set by wind-command OR estimation); navigation holds neutral until wind known. wind-observation command now wired to AutoController::beginWindObservation()/observeWind(): sails fixed +10° tack, circular-EMA smooths GPS course, after WIND_OBS_DISTANCE_M=30 m latches wind = smoothHeading+90° via nav_handleWindObservation(). Heartbeat rotorDeg now -90..+90. Compiles 368 KB (28%) / 25 KB (7%). navigation.h logic untouched. |
+| 2026-06-04 | Auto rudder range reduced to ±20°. First fix mapped nav rudder ±20° onto the full ±90° winch (±83 µs) — too aggressive on the bench. Reverted to a gentle envelope: nav rudder degrees now map **1:1 to physical winch degrees**, clamped to `ROTOR_AUTO_RANGE_DEG`=20° (new Calibration.h constant). usPerDeg = (ROTOR_MAX−CENTER)/ROTOR_RANGE_DEG = 83/90 ≈ 0.92 µs/° → auto winch travel only 1482–1518 µs. Manual mode keeps full ±90°. Flashed to boat (chip ESP32-D0WDQ6-V3, ttyUSB1). |
+| 2026-06-04 | IHM session: launched full stack on real hardware — confirmed end-to-end LoRa link (boat heartbeats → transceiver → serial_link → Mongo → web map, bat 7.7 V, GPS fix in Brest). Added burst retransmit (3×, 0.35 s) in serial_link.py to beat LoRa half-duplex collisions (commands are idempotent). Diagnosed wind-observation: command reaches boat but observation is invisible in telemetry until it completes after 30 m travel. Transceiver USB port alternates ttyUSB0/ttyUSB1 on reconnect — pass explicit port to start_ihm.sh. |
 
 ---
 

@@ -51,13 +51,24 @@ def read(ser, collection):
         )
 
 
+# Le lien LoRa est half-duplex : un envoi unique entre souvent en collision
+# avec le heartbeat du bateau (TX bloquant ~450 ms toutes les secondes) et se
+# perd. On répète donc chaque commande quelques fois, espacées, pour qu'au
+# moins une tombe dans une fenêtre d'écoute. Toutes les commandes du protocole
+# sont idempotentes, donc la répétition est sans danger.
+COMMAND_BURST_COUNT = 3
+COMMAND_BURST_GAP_S = 0.35
+
+
 def send(ser, collection):
     message = db.get_pending_message(collection)
     if message:
         data = json.dumps(message["data"], separators=(",", ":")) + "\n"
-        ser.write(data.encode("utf-8"))
-        print(f"🚀 Envoi vers la carte : {data.strip()}")
-        time.sleep(0.5)
+        payload = data.encode("utf-8")
+        for i in range(COMMAND_BURST_COUNT):
+            ser.write(payload)
+            print(f"🚀 Envoi vers la carte ({i + 1}/{COMMAND_BURST_COUNT}) : {data.strip()}")
+            time.sleep(COMMAND_BURST_GAP_S)
 
 
 
