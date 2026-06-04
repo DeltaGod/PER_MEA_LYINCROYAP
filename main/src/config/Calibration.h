@@ -45,5 +45,13 @@ static constexpr uint16_t ESC_SLEW_US = 30;
 // far enough for the track to be meaningful.
 static constexpr float WIND_OBS_DISTANCE_M  = 30.0f;  // min travel before estimate is valid
 static constexpr float WIND_OBS_SMOOTH_ALPHA = 0.1f;  // circular EMA factor for GPS course
+static constexpr float AUTO_PROP_MIN_SPEED_KMPH = 0.8f;
+static constexpr float AUTO_PROP_TARGET_SPEED_KMPH = 2.0f;
+static constexpr float AUTO_PROP_STOP_RADIUS_M = 15.0f;
+static constexpr float AUTO_PROP_HEADING_MAX_DEG = 70.0f;
+
+static constexpr uint16_t AUTO_ESC_MIN_US    = 1100;
+static constexpr uint16_t AUTO_ESC_CRUISE_US = 1300;
+static constexpr uint16_t AUTO_ESC_MAX_US    = 1550;
 
 } // namespace Calibration

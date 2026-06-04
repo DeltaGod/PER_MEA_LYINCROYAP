@@ -13,6 +13,11 @@ public:
     ActuatorCommand compute(float windDeg,
                             const GpsPosition& pos,
                             const Waypoint& target);
+
+    static uint16_t computeAutoPropulsionUs(const GpsPosition& pos,
+                                        float distM,
+                                        float bearingDeg,
+                                        float waypointRadiusM);
     void reset();
 
     // --- Wind estimation from GPS track (Phase 5) ---

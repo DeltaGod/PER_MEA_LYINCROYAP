@@ -62,6 +62,12 @@ ActuatorCommand AutoController::compute(float windDeg,
 
     cmd.sailUs  = sailToUs(sailAngle_);
     cmd.rotorUs = rudderToUs(rudderAngle_);
+    cmd.esc1Us = computeAutoPropulsionUs(
+        pos,
+        dist,
+        bearing,
+        target.radiusM
+    );
     return cmd;
 }
 
@@ -119,4 +125,56 @@ ActuatorCommand AutoController::observeWind(const GpsPosition& pos) {
         navMode_         = "wind-acquired";
     }
     return cmd;
+}
+
+static float wrap180(float angleDeg) {
+    while (angleDeg > 180.0f) angleDeg -= 360.0f;
+    while (angleDeg < -180.0f) angleDeg += 360.0f;
+    return angleDeg;
+}
+
+static uint16_t clampEscUs(int32_t us) {
+    if (us < Calibration::ESC_STOP_US) return Calibration::ESC_STOP_US;
+    if (us > Calibration::ESC_MAX_US)  return Calibration::ESC_MAX_US;
+    return (uint16_t)us;
+}
+
+
+static uint16_t computeAutoPropulsionUs (const GpsPosition& pos,
+                                         float distM,
+                                         float bearingDeg, 
+                                         float waypointRadiusM) 
+{
+    
+    if (!pos.valid) {
+        return Calibration::ESC_STOP_US;
+    }
+
+    if (distM <= waypointRadiusM + Calibration::AUTO_PROP_STOP_RADIUS_M) {
+        return Calibration::ESC_STOP_US;
+    }
+
+    if (pos.speedKmph >= Calibration::AUTO_PROP_TARGET_SPEED_KMPH) {
+        return Calibration::ESC_STOP_US;
+    }
+    float headingError = wrap180(bearingDeg - pos.courseDeg);
+
+    if (pos.speedKmph > 0.5f && std::fabs(headingError) > Calibration::AUTO_PROP_HEADING_MAX_DEG) {
+        return Calibration::AUTO_ESC_MIN_US;
+    }
+
+    if (pos.speedKmph < Calibration::AUTO_PROP_MIN_SPEED_KMPH) {
+        return Calibration::AUTO_ESC_CRUISE_US;
+    }
+
+    float speedError = Calibration::AUTO_PROP_TARGET_SPEED_KMPH - pos.speedKmph;
+    int32_t escUs = static_cast<int32_t>(
+        Calibration::ESC_STOP_US + speedError * 180.0f
+    );
+
+    if (escUs < Calibration::AUTO_ESC_MIN_US) {
+        escUs = Calibration::AUTO_ESC_MIN_US;
+    }
+
+    return clampEscUs(escUs);
 }
