@@ -220,6 +220,7 @@ void HTMLExporter::writeAllScenariosJSON(std::ofstream& f,
               << ",spd:" << h.speed
               << ",sail:" << h.sailAngle
               << ",rud:" << h.rudderAngle
+              << ",rudPhysical:" << h.physicalRudderAngle
               << ",wd:" << h.windDirection
               << ",ws:" << h.windSpeed
               << ",m:\"" << mode << "\"}";
@@ -246,6 +247,7 @@ void HTMLExporter::writeAllScenariosJSON(std::ofstream& f,
               << ",spd:" << h.speed
               << ",sail:" << h.sailAngle
               << ",rud:" << h.rudderAngle
+              << ",rudPhysical:" << h.physicalRudderAngle
               << ",wd:" << h.windDirection
               << ",ws:" << h.windSpeed
               << ",m:\"" << mode << "\"}";
@@ -314,7 +316,7 @@ void HTMLExporter::writeHTMLBody(std::ofstream& f, const std::vector<ScenarioDat
     // Gauges
     f << "<div id=\"gauges\">\n";
     f << "  <div class=\"gauge\">\n";
-    f << "    <div class=\"gauge-label\">&#9660; Gouvernail</div>\n";
+    f << "    <div class=\"gauge-label\">&#9660; Commande servo safran</div>\n";
     f << "    <div class=\"gauge-bar-bg\">\n";
     f << "      <div class=\"gauge-bar\" id=\"rudder-bar\" style=\"width:50%;left:50%;background:#ff5555;\"></div>\n";
     f << "      <div style=\"position:absolute;left:50%;top:0;width:1px;height:100%;background:rgba(255,255,255,0.3);\"></div>\n";
@@ -322,7 +324,7 @@ void HTMLExporter::writeHTMLBody(std::ofstream& f, const std::vector<ScenarioDat
     f << "    <div class=\"gauge-value\" id=\"rudder-val\">0&deg;</div>\n";
     f << "  </div>\n";
     f << "  <div class=\"gauge\">\n";
-    f << "    <div class=\"gauge-label\">&#9973; Voile</div>\n";
+    f << "    <div class=\"gauge-label\">&#9973; Aileron de voile</div>\n";
     f << "    <div class=\"gauge-bar-bg\">\n";
     f << "      <div class=\"gauge-bar\" id=\"sail-bar\" style=\"width:50%;left:50%;background:#50fa7b;\"></div>\n";
     f << "      <div style=\"position:absolute;left:50%;top:0;width:1px;height:100%;background:rgba(255,255,255,0.3);\"></div>\n";
@@ -630,14 +632,26 @@ function updateFrame(i) {
         ]);
     }
 
+    // Apparent wind: true wind flow minus the boat velocity.
+    const windFlowDeg = (d.wd + 180) % 360;
+    const trueWindEast = d.ws * Math.sin(windFlowDeg * Math.PI / 180);
+    const trueWindNorth = d.ws * Math.cos(windFlowDeg * Math.PI / 180);
+    const boatEast = d.spd * Math.sin(d.hdg * Math.PI / 180);
+    const boatNorth = d.spd * Math.cos(d.hdg * Math.PI / 180);
+    const apparentFlowEast = trueWindEast - boatEast;
+    const apparentFlowNorth = trueWindNorth - boatNorth;
+    const apparentFlowDeg =
+        (Math.atan2(apparentFlowEast, apparentFlowNorth) * 180 / Math.PI + 360) % 360;
+
+    // Absolute orientation of the freely rotating wing sail.
+    const sailDeg = apparentFlowDeg - d.sail;
+
     // Sail line (yellow) — rigid wing sail (weathervane + aileron)
     // The sail is free to rotate: it aligns with the wind flow.
     // The aileron (d.sail = ±10°) deflects the TRAILING EDGE,
     // which tilts the wing body in the OPPOSITE direction.
     // Wind blows FROM d.wd, so wind FLOW goes towards (d.wd + 180)°.
     if (sailLine) {
-        const windFlowDeg = (d.wd + 180) % 360;
-        const sailDeg = windFlowDeg - d.sail;  // body tilts opposite to aileron
         const sailRad = sailDeg * Math.PI / 180;
         const sLen = 0.0006;
         sailLine.setLatLngs([
@@ -646,13 +660,15 @@ function updateFrame(i) {
         ]);
     }
 
-    // Rudder line (red) - at the back of the boat, offset by rudderAngle
+    // Rudder line (red): actual filtered physical angle produced by the
+    // -relative apparent wind / 2 base plus the navigation offset.
     if (rudderLine) {
         const backRad = (d.hdg + 180) * Math.PI / 180;
         const backD = 0.00012;
         const bLat = d.lat + backD * Math.cos(backRad);
         const bLng = d.lng + backD * Math.sin(backRad);
-        const rudDeg = d.hdg + 180 + d.rud;
+
+        const rudDeg = d.hdg + 180 + d.rudPhysical;
         const rudRad = rudDeg * Math.PI / 180;
         const rLen = 0.0003;
         rudderLine.setLatLngs([
@@ -717,7 +733,7 @@ function updateFrame(i) {
     document.getElementById('wind-dir-val').textContent = d.wd.toFixed(0) + '°';
 
     // ── Gauges ──
-    const rudPct = (d.rud / 20) * 50;
+    const rudPct = (d.rud / 110) * 50;
     const rudBar = document.getElementById('rudder-bar');
     if (d.rud >= 0) {
         rudBar.style.left = '50%';

@@ -62,8 +62,8 @@ navigation incohérente.
 
 ### Gouvernail
 
-Le gouvernail fait tourner le bateau. La navigation actuelle limite sa commande
-à environ `-20°` / `+20°`.
+Le gouvernail fait tourner le bateau. La navigation limite la correction de cap
+à `-20°` / `+20°`, puis lui ajoute la compensation `vent relatif / 2`.
 
 ### Voile
 
@@ -80,8 +80,9 @@ deux positions simplifiées, `-10°` et `+10°`, choisies selon le côté du ven
 - **Virement de bord** : l'avant du bateau traverse l'axe du vent.
 - **Empannage** : l'arrière du bateau traverse l'axe du vent.
 
-L'empannage demande une manœuvre contrôlée, car la voile peut changer de côté
-brutalement.
+Dans la logique actuelle, l'empannage n'est pas exécuté. Il est évité, car la
+voile pourrait changer de côté brutalement lorsque l'arrière du bateau traverse
+l'axe du vent.
 
 ## 3. Pourquoi le bateau ne va pas toujours tout droit
 
@@ -107,8 +108,8 @@ il tire des bords.
 ### Zone sensible sous le vent
 
 Une zone de `20°` autour de la direction opposée au vent est également traitée
-à part. Elle évite de rester exactement vent arrière et permet de contrôler les
-empannages.
+à part. Elle évite de rester exactement vent arrière et sert à déclencher la
+procédure d'évitement lorsqu'un changement de côté serait nécessaire.
 
 ## 4. Angles relatifs
 
@@ -144,7 +145,7 @@ Chaque appel renvoie un résultat contenant notamment :
 | Champ | Rôle |
 |---|---|
 | `sailAngle` | commande de voile |
-| `rudderAngle` | commande de gouvernail |
+| `rudderAngle` | commande servo : vent relatif / 2 + correction |
 | `sendInterval` | délai proposé avant un nouvel envoi |
 | `mode` | nom court de la décision |
 | `logMessage` | explication destinée au diagnostic |
@@ -158,7 +159,7 @@ Certaines décisions durent plusieurs appels. `NavState` mémorise notamment :
 - le corridor associé au waypoint courant ;
 - le côté choisi pour les bords face au vent ;
 - le côté choisi sous le vent ;
-- l'étape en cours d'un empannage ;
+- l'étape en cours de la procédure d'évitement d'empannage ;
 - la cible d'une manœuvre.
 
 Sans cet état, le bateau pourrait changer d'avis à chaque itération et osciller
@@ -173,7 +174,7 @@ Waypoint atteint ?
     oui → signaler l'arrivée
     non
       ↓
-Empannage déjà commencé ?
+Évitement d'empannage déjà commencé ?
     oui → poursuivre ses étapes
     non
       ↓
@@ -186,7 +187,7 @@ Waypoint sous le vent ?
     non
       ↓
 Rotation directe traversant l'axe arrière ?
-    oui → commencer un empannage
+    oui → commencer la procédure d'évitement
     non
       ↓
 Cible presque devant ?
@@ -206,11 +207,12 @@ erreur = différence entre cap actuel et cap cible
 commande de gouvernail = erreur × gain
 ```
 
-La commande est ensuite limitée à `20°`. Plus l'erreur est grande, plus le
-gouvernail braque, jusqu'à cette limite.
+La correction est limitée à `20°`. La navigation lui ajoute ensuite la
+compensation `vent relatif / 2` pour produire la commande servo totale.
 
 Hors des zones interdites, si le waypoint est à moins de `5°` de l'avant, le
-bateau est considéré correctement aligné et le gouvernail revient à zéro.
+bateau est considéré correctement aligné. La correction revient à zéro, mais
+la commande servo conserve la compensation `vent relatif / 2`.
 Sinon, le code ne vise pas directement le relèvement avec cette formule : il
 choisit de lofer ou d'abattre et modifie la commande de gouvernail par pas de
 `5°`.
@@ -309,17 +311,39 @@ Comme face au vent, il conserve un côté et utilise le corridor pour décider
 quand changer. L'objectif est d'avancer vers la cible sans rester sur un axe où
 la voile et le changement de côté deviennent difficiles à contrôler.
 
-## 12. Empannage contrôlé
+## 12. Procédure d'évitement d'empannage
 
 Si le chemin de rotation le plus court traverse l'axe arrière du vent, la
-navigation lance une petite machine à états.
+navigation refuse cette rotation directe. Elle lance une machine à états qui
+fait passer le bateau par l'axe face au vent.
 
-Elle réalise la manœuvre en plusieurs appels au lieu de changer brutalement de
-commande en une seule fois. `NavState` conserve la phase courante jusqu'à ce que
-le cap intermédiaire ou final soit atteint.
+La route d'évitement comporte trois étapes :
 
-Le point important pour le lecteur est qu'un cap temporairement différent du
-waypoint peut être volontaire : le bateau termine d'abord l'empannage.
+1. rejoindre la limite de la zone interdite face au vent ;
+2. traverser l'axe du vent avec l'avant du bateau, comme pendant un virement ;
+3. revenir vers la limite sous le vent du côté souhaité.
+
+```text
+                             vent
+                               ↑
+                 étape 2  ←  ⛵  →  passage par l'avant
+                            /     \
+                  étape 1 /       \ étape 3
+                         /         \
+                  ancien côté     nouveau côté
+                         axe vent arrière
+```
+
+`NavState` conserve la phase courante jusqu'à ce que chaque cap intermédiaire
+soit atteint. Le bateau contourne ainsi la direction vent arrière au lieu de la
+traverser avec sa poupe.
+
+Les noms internes `empannagePhase`, `nav_handleEmpannageLoop(...)` et
+`NAV_EMPANNAGE_...` peuvent prêter à confusion. Dans le comportement actuel,
+ils représentent les phases de cet évitement, pas l'exécution d'un empannage.
+
+Un cap temporairement très différent du waypoint est donc volontaire : le
+bateau termine d'abord la route d'évitement.
 
 ## 13. Choix de la voile
 
@@ -340,9 +364,18 @@ Avant la navigation, `nav_handleWindObservation(...)` attend une phase
 d'observation. Dans le simulateur, l'estimation est acquise lorsque le bateau
 s'est éloigné de `30 m` de sa position de départ.
 
-La méthode estime le vent à partir du cap et d'un décalage de `90°`. Elle
-représente une procédure simplifiée, pas un véritable algorithme de fusion de
-capteurs.
+Au début de cette phase, le bateau est supposé placé avec le vent relatif à
+`+90°`. La commande est donc forcée ainsi :
+
+```text
+aileron = +10°
+commande servo safran = 90° / 2 = +45°
+```
+
+La méthode estime ensuite le vent avec `cap + 90°`. Dès que cette estimation est
+acquise, la commande fixe de `45°` est remplacée par
+`vent relatif calculé / 2`. Cette procédure reste simplifiée et suppose que le
+placement initial à `90°` est respecté.
 
 Une mauvaise estimation du vent décale toutes les zones interdites. Le bateau
 peut alors tirer des bords au mauvais endroit ou tenter une route impossible.
@@ -378,7 +411,7 @@ Les constantes actuelles se trouvent au début de `navigation.h` :
 | zone morte directe | `5°` | évite de corriger une petite erreur |
 | gain direct | `0,5` | intensité du gouvernail en navigation normale |
 | gain VDB | `0,8` | intensité pendant certains changements de bord |
-| limite gouvernail | `20°` | braquage maximal demandé |
+| limite de correction | `20°` | correction maximale autour de la compensation |
 | demi-largeur corridor | `100 m` | écart toléré autour de la route |
 | zone face au vent | `45°` | angle interdit de chaque côté du vent |
 | zone sous le vent | `20°` | angle évité autour du vent arrière |
@@ -412,7 +445,12 @@ La logique reste simplifiée et possède des limites :
 - le corridor est construit en approximation locale, adaptée aux trajets
   relativement courts ;
 - le simulateur ne modélise pas le courant et les vagues ;
-- la physique simulée et les capteurs réels peuvent réagir différemment ;
+- le simulateur ajoute une dérive, un vent apparent et une compensation mécanique,
+  avec un safran de base réglé à l'opposé de la moitié du vent relatif, mais les
+  coefficients restent à calibrer sur le MEA réel ;
+- la navigation reçoit un GPS et un cap simulés avec du bruit, particulièrement
+  visible à faible vitesse ;
+- la physique simulée et les capteurs réels peuvent encore réagir différemment ;
 - `sendInterval` exprime une intention de rythme, mais la boucle du simulateur
   utilise son propre pas de temps.
 
@@ -423,7 +461,7 @@ Pour analyser une trajectoire surprenante, regarder dans cet ordre :
 3. le mode de navigation affiché ;
 4. le cap cible et le cap actuel ;
 5. l'écart au corridor ;
-6. l'état d'un éventuel empannage ;
+6. l'état d'une éventuelle procédure d'évitement d'empannage ;
 7. le comportement du modèle physique.
 
 ## 19. Ordre de lecture du code
@@ -435,5 +473,5 @@ Après ce document, l'ordre suivant limite les allers-retours :
 3. les calculs GPS et de corridor ;
 4. `nav_applyTargetHeading(...)` ;
 5. les fonctions face au vent et sous le vent ;
-6. la machine à états d'empannage ;
+6. la machine à états d'évitement d'empannage ;
 7. `nav_handleNavigationWithState(...)`, qui orchestre le tout.

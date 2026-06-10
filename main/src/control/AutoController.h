@@ -28,6 +28,7 @@ private:
     double windObsStartLon_ = 0.0;
 
     float lastRudderDeg_ = 0.0f;
+    bool rudderCommandValid_ = false;
     int8_t lastSailSide_ = +1;
     const char* modeName_ = "no-wind";
 

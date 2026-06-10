@@ -2,7 +2,7 @@
 # Compile la simulation sans dépendances Arduino
 
 CXX = g++
-CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -g -I. -I../main/src/navigation
+CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -g -MMD -MP -I. -I../main/src/navigation
 LDFLAGS = -lm
 
 # Répertoires source
@@ -20,6 +20,7 @@ SOURCES = \
 
 # Fichiers objet
 OBJECTS = $(SOURCES:.cpp=.o)
+DEPS = $(OBJECTS:.o=.d)
 NAV_HEADER = ../main/src/navigation/navigation.h
 
 # Cible exécutable
@@ -36,7 +37,7 @@ $(TARGET): $(OBJECTS)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(OBJECTS) $(TARGET)
+	rm -f $(OBJECTS) $(DEPS) $(TARGET)
 	rm -f output/*.csv output/*.html
 	@echo "✓ Clean complete"
 
@@ -51,6 +52,8 @@ run-all: $(TARGET)
 
 # Phony targets
 .PHONY: all clean run run-all help
+
+-include $(DEPS)
 
 help:
 	@echo "AutoBoat Simulator"

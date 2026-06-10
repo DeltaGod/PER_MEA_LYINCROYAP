@@ -26,7 +26,8 @@ struct SimBoatState {
 
     // Angles des servos
     float sailAngle;      // -10 à +10°
-    float rudderAngle;    // -20 à +20°
+    float rudderAngle;    // Commande servo = compensation + correction
+    float physicalRudderAngle; // Angle réel après liaison mécanique
 
     // Vent
     double windDirection; // Direction d'où vient le vent (0-360°)
@@ -39,6 +40,12 @@ struct SimBoatState {
     // 4=abattre, 5=standby, 6=upwind-zigzag, 7=downwind-zigzag,
     // 8=avoid-gybe)
     int navMode = 0;
+};
+
+struct SimSensorState {
+    double latitude;
+    double longitude;
+    double heading;
 };
 
 class SimulationEnvironment {
@@ -86,6 +93,7 @@ public:
     float getRudderAngle() const { return state.rudderAngle; }
     double getWindDirection() const { return state.windDirection; }
     double getWindSpeed() const { return state.windSpeed; }
+    const SimSensorState& getSensorState() const { return sensorState; }
 
     /**
      * Calcule distance et cap vers un waypoint
@@ -105,14 +113,17 @@ public:
 
 private:
     SimBoatState state;
+    SimSensorState sensorState;
     std::vector<SimBoatState> history;  // Historique pour analyse
-    double filteredRudderOffset = 0.0;  // réponse du bateau plus lente que la consigne servo
+    double filteredPhysicalRudderDeg = 0.0;
+    double yawRateDegPerSec = 0.0;
 
     /**
      * Calcule l'angle de cap en fonction des servos et du vent
      * Simule le comportement hydrodynamique du bateau
      */
     void updateBoatDynamics(float sailAngle, float rudderAngle, unsigned long dt_ms);
+    void updateSensors();
 
     /**
      * Convertit position GPS en mètres pour les calculs physiques

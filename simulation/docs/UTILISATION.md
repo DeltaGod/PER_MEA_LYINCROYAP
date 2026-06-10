@@ -205,6 +205,10 @@ Valeurs conseillées :
 | trajet de plusieurs heures | `100` à `500 ms` |
 | trajet de plusieurs jours | `1000 ms` |
 
+Les inerties du bateau sont calculées en fonction du temps et restent donc
+comparables entre ces valeurs. En revanche, la navigation prend une décision à
+chaque pas : un grand pas rend ses corrections moins fréquentes.
+
 Éviter un pas supérieur à `10000 ms` avec le code actuel : l'affichage de
 progression suppose qu'au moins une itération existe par tranche de dix
 secondes.
@@ -351,6 +355,11 @@ Vérifier d'abord :
 - la durée disponible pour atteindre la cible ;
 - le fait qu'un zigzag peut être normal ;
 - les limites du modèle décrites dans `CODE_ARCHITECTURE.md`.
+
+Une petite dérive est volontaire : le modèle MEA ajoute une composante latérale
+due au vent apparent. La navigation utilise aussi un GPS et un cap simulés avec
+du bruit. Un scénario qui fonctionnait avec l'ancien modèle idéal peut donc
+révéler une faiblesse de correction de route.
 
 ### Un numéro de scénario ne sélectionne rien
 

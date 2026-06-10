@@ -4,8 +4,10 @@ set(CMAKE_CXX_STANDARD 14)
 
 include_directories(
     ${CMAKE_SOURCE_DIR}/stubs       # Arduino.h stub (searched first)
-    ${CMAKE_SOURCE_DIR}/../main     # project headers
+    ${CMAKE_SOURCE_DIR}/../main/src # project headers
 )
+
+add_compile_definitions(DEBUG_MODE=0)
 
 add_executable(test_runner
     test_runner.cpp

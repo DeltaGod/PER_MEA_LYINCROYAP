@@ -4,11 +4,14 @@
 #include <math.h>
 
 namespace {
-constexpr float RUDDER_LIMIT_DEG = 20.0f;
+constexpr float RUDDER_COMMAND_LIMIT_DEG = 110.0f;
 constexpr float DEFAULT_CORRIDOR_HALF_WIDTH_M = 20.0f;
 constexpr float SAIL_RIGHT_DEG = 10.0f;
 constexpr float SAIL_LEFT_DEG = -10.0f;
 constexpr float WIND_OBSERVATION_DISTANCE_M = 30.0f;
+constexpr float WIND_OBSERVATION_RELATIVE_DEG = 90.0f;
+constexpr float WIND_OBSERVATION_RUDDER_COMMAND_DEG =
+    WIND_OBSERVATION_RELATIVE_DEG / 2.0f;
 }
 
 void AutoController::reset() {
@@ -16,6 +19,7 @@ void AutoController::reset() {
     windObsActive_ = false;
     windObsStartValid_ = false;
     lastRudderDeg_ = 0.0f;
+    rudderCommandValid_ = false;
     lastSailSide_ = +1;
     modeName_ = "no-wind";
 }
@@ -28,12 +32,16 @@ void AutoController::setWindDirection(float windDeg) {
     windDeg_ = normalizeDeg(windDeg);
     windValid_ = true;
     windObsActive_ = false;
+    rudderCommandValid_ = false;
     resetNavigationState();
 }
 
 void AutoController::startWindObservation(const GpsPosition& pos) {
     windObsActive_ = true;
     windObsStartValid_ = pos.valid;
+    lastSailSide_ = +1;
+    lastRudderDeg_ = WIND_OBSERVATION_RUDDER_COMMAND_DEG;
+    rudderCommandValid_ = true;
     if (pos.valid) {
         windObsStartLat_ = pos.lat;
         windObsStartLon_ = pos.lon;
@@ -54,7 +62,8 @@ ActuatorCommand AutoController::windObservationCommand(const GpsPosition& pos) {
             windObsStartLat_ = pos.lat;
             windObsStartLon_ = pos.lon;
         }
-        return sailCommand(SAIL_RIGHT_DEG, -RUDDER_LIMIT_DEG, modeName_);
+        return sailCommand(SAIL_RIGHT_DEG,
+                           WIND_OBSERVATION_RUDDER_COMMAND_DEG, modeName_);
     }
 
     const float dist = pos.valid
@@ -70,9 +79,12 @@ ActuatorCommand AutoController::windObservationCommand(const GpsPosition& pos) {
         lastRudderDeg_);
 
     if (r.windAcquired && pos.speedKmph > 0.5f) {
-        setWindDirection(static_cast<float>(r.acquiredWindDir));
+        const float acquiredWindDeg = static_cast<float>(r.acquiredWindDir);
+        setWindDirection(acquiredWindDeg);
         modeName_ = "wind-ready";
-        return ActuatorCommand{};
+        const float relativeWindDeg =
+            nav_relativeAngle(normalizeDeg(pos.courseDeg), acquiredWindDeg);
+        return sailCommand(r.sailAngle, relativeWindDeg / 2.0f, modeName_);
     }
     return sailCommand(r.sailAngle, r.rudderAngle, modeName_);
 }
@@ -96,6 +108,10 @@ ActuatorCommand AutoController::update(const GpsPosition& pos, const Waypoint& t
         return safeCommand("arrived");
     }
 
+    const float relativeWindDeg =
+        nav_relativeAngle(boatHeadingDeg, windDeg_);
+    const float currentRudderCommandDeg =
+        rudderCommandValid_ ? lastRudderDeg_ : relativeWindDeg / 2.0f;
     const NavResult r = nav_handleNavigationWithState(
         navState_,
         boatHeadingDeg,
@@ -103,7 +119,7 @@ ActuatorCommand AutoController::update(const GpsPosition& pos, const Waypoint& t
         waypointDistanceM,
         windDeg_,
         lastSailSide_ < 0 ? SAIL_LEFT_DEG : SAIL_RIGHT_DEG,
-        lastRudderDeg_,
+        currentRudderCommandDeg,
         target.radiusM,
         pos.lat,
         pos.lon,
@@ -117,11 +133,16 @@ ActuatorCommand AutoController::update(const GpsPosition& pos, const Waypoint& t
 ActuatorCommand AutoController::sailCommand(float sailAngleDeg, float rudderAngleDeg, const char* mode) {
     ActuatorCommand cmd;
     lastSailSide_ = (sailAngleDeg < 0) ? -1 : +1;
-    lastRudderDeg_ = clamp(rudderAngleDeg, -RUDDER_LIMIT_DEG, RUDDER_LIMIT_DEG);
+    lastRudderDeg_ =
+        clamp(rudderAngleDeg, -RUDDER_COMMAND_LIMIT_DEG,
+              RUDDER_COMMAND_LIMIT_DEG);
+    rudderCommandValid_ = true;
     modeName_ = mode;
 
     cmd.sailUs = (lastSailSide_ < 0) ? Calibration::SAIL_MINUS_US : Calibration::SAIL_PLUS_US;
-    const float t = (lastRudderDeg_ + RUDDER_LIMIT_DEG) / (2.0f * RUDDER_LIMIT_DEG);
+    const float t =
+        (lastRudderDeg_ + RUDDER_COMMAND_LIMIT_DEG) /
+        (2.0f * RUDDER_COMMAND_LIMIT_DEG);
     cmd.rotorUs = static_cast<uint16_t>(
         Calibration::ROTOR_MIN_US +
         t * (Calibration::ROTOR_MAX_US - Calibration::ROTOR_MIN_US) + 0.5f);

@@ -14,7 +14,8 @@
 static const double NAV_DIRECT_DEAD_ZONE_DEG = 5.0;
 static const double NAV_VDB_RUDDER_GAIN = 0.8;
 static const double NAV_DIRECT_RUDDER_GAIN = 0.5;
-static const float NAV_RUDDER_LIMIT_DEG = 20.0f;
+static const float NAV_RUDDER_CORRECTION_LIMIT_DEG = 20.0f;
+static const float NAV_RUDDER_COMMAND_LIMIT_DEG = 110.0f;
 static const double NAV_DEFAULT_CORRIDOR_HALF_WIDTH_M = 100.0;
 static const double NAV_GEO_EPSILON_DEG = 0.0000001;
 static const double NAV_EARTH_RADIUS_M = 6371000.0;
@@ -45,11 +46,31 @@ inline double nav_oppositeAngle(double angleDeg) {
 inline int nav_angleSide(double angleDeg) { return angleDeg < 0 ? -1 : 1; }
 
 inline float nav_clampRudder(float rudderAngleDeg) {
-  if (rudderAngleDeg > NAV_RUDDER_LIMIT_DEG)
-    return NAV_RUDDER_LIMIT_DEG;
-  if (rudderAngleDeg < -NAV_RUDDER_LIMIT_DEG)
-    return -NAV_RUDDER_LIMIT_DEG;
+  if (rudderAngleDeg > NAV_RUDDER_CORRECTION_LIMIT_DEG)
+    return NAV_RUDDER_CORRECTION_LIMIT_DEG;
+  if (rudderAngleDeg < -NAV_RUDDER_CORRECTION_LIMIT_DEG)
+    return -NAV_RUDDER_CORRECTION_LIMIT_DEG;
   return rudderAngleDeg;
+}
+
+inline float nav_rudderCompensation(double relativeWindDeg) {
+  return static_cast<float>(relativeWindDeg / 2.0);
+}
+
+inline float nav_rudderCorrection(float servoCommandDeg,
+                                  double relativeWindDeg) {
+  return nav_clampRudder(servoCommandDeg -
+                         nav_rudderCompensation(relativeWindDeg));
+}
+
+inline float nav_rudderCommand(float correctionDeg, double relativeWindDeg) {
+  float commandDeg =
+      nav_rudderCompensation(relativeWindDeg) + nav_clampRudder(correctionDeg);
+  if (commandDeg > NAV_RUDDER_COMMAND_LIMIT_DEG)
+    return NAV_RUDDER_COMMAND_LIMIT_DEG;
+  if (commandDeg < -NAV_RUDDER_COMMAND_LIMIT_DEG)
+    return -NAV_RUDDER_COMMAND_LIMIT_DEG;
+  return commandDeg;
 }
 
 inline double nav_normalizeAngle(double angleDeg) {
@@ -478,6 +499,8 @@ inline NavResult nav_handleNavigationWithState(
   double oppositeWind = nav_oppositeAngle(windDirectionDeg);
   double relativeWind = nav_relativeAngle(boatHeadingDeg, windDirectionDeg);
   double relativeWpt = nav_relativeAngle(boatHeadingDeg, waypointHeadingDeg);
+  float currentRudderCorrection =
+      nav_rudderCorrection(currentRudderAngle, relativeWind);
   bool waypointUpwind =
       std::abs(nav_relativeAngle(windDirectionDeg, waypointHeadingDeg)) <
       NAV_UPWIND_FORBIDDEN_ANGLE_DEG;
@@ -515,11 +538,11 @@ inline NavResult nav_handleNavigationWithState(
     result.rudderAngle = 0;
     result.logMessage = "Direct: waypoint aligned";
   } else {
-    nav_handleLoferAbattre(result, relativeWind, currentRudderAngle,
+    nav_handleLoferAbattre(result, relativeWind, currentRudderCorrection,
                            nav_sameSign(relativeWind, relativeWpt));
   }
 
-  result.rudderAngle = nav_clampRudder(result.rudderAngle);
+  result.rudderAngle = nav_rudderCommand(result.rudderAngle, relativeWind);
   return result;
 }
 

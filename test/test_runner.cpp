@@ -634,9 +634,27 @@ void test_AutoController_Basic() {
     CHECK_EQ("no wind estimate → ESC stopped", cmd.esc1Us, Calibration::ESC_STOP_US);
     CHECK("no wind estimate mode reported", strcmp(ac.modeName(), "no-wind") == 0);
 
+    ac.reset();
+    ac.startWindObservation(pos);
+    cmd = ac.update(pos, north);
+    const uint16_t expectedObservationRotor = static_cast<uint16_t>(
+        Calibration::ROTOR_MIN_US +
+        ((45.0f + 110.0f) / 220.0f) *
+            (Calibration::ROTOR_MAX_US - Calibration::ROTOR_MIN_US) +
+        0.5f);
+    CHECK_EQ("wind observation assumes +90 deg and commands +45 deg",
+             cmd.rotorUs, expectedObservationRotor);
+
+    ac.reset();
     ac.setWindDirection(90.0f);
     cmd = ac.update(pos, north);
-    CHECK_EQ("direct aligned waypoint → rotor center", cmd.rotorUs, Calibration::ROTOR_CENTER_US);
+    const uint16_t expectedCompensatedRotor = static_cast<uint16_t>(
+        Calibration::ROTOR_MIN_US +
+        ((45.0f + 110.0f) / 220.0f) *
+            (Calibration::ROTOR_MAX_US - Calibration::ROTOR_MIN_US) +
+        0.5f);
+    CHECK_EQ("direct aligned waypoint → rotor compensates relative wind / 2",
+             cmd.rotorUs, expectedCompensatedRotor);
     CHECK_EQ("direct aligned waypoint → sail plus for wind on right", cmd.sailUs, Calibration::SAIL_PLUS_US);
     CHECK("direct aligned mode", strcmp(ac.modeName(), "direct") == 0);
 

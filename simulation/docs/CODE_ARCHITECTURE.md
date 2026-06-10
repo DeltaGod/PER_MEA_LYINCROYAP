@@ -127,7 +127,9 @@ Les waypoints sont parcourus dans leur ordre d'ajout.
 `startWindObservation()` place le bateau dans une phase particulière. Le
 simulateur attend que le bateau se soit éloigné de `30 m` de son point de
 départ, puis estime la direction du vent à partir de son cap. Cette phase
-reproduit grossièrement le comportement prévu sur le bateau réel.
+suppose initialement un vent relatif de `+90°` et force donc la commande du
+safran à `+45°`. Après acquisition, la compensation est recalculée avec le vent
+relatif estimé.
 
 ### Navigation
 
@@ -172,12 +174,19 @@ Une erreur de trajectoire peut donc venir de l'une ou de l'autre partie.
 | `latitude`, `longitude` | Position GPS | degrés |
 | `heading` | Cap du bateau | degrés |
 | `speed` | Vitesse | m/s |
-| `sailAngle` | Position de la voile | degrés |
-| `rudderAngle` | Position du gouvernail | degrés |
+| `sailAngle` | Déflexion de l'aileron de voile | degrés |
+| `rudderAngle` | Commande servo : compensation + correction | degrés |
 | `windDirection` | Direction d'où vient le vent | degrés |
 | `windSpeed` | Vitesse du vent | m/s |
 | `time` | Temps simulé | ms |
 | `navMode` | Décision de navigation affichée | entier |
+
+Cet état représente le bateau physique et sert à l'export. La navigation ne lit
+pas directement ces valeurs parfaites. Elle reçoit un `SimSensorState` avec :
+
+- une position GPS perturbée d'environ `±1,5 m` ;
+- un cap légèrement bruité ;
+- un bruit de cap plus important quand la vitesse devient faible.
 
 Les angles de cap suivent la convention d'une boussole :
 
@@ -196,7 +205,19 @@ de l'ouest et souffle vers l'est.
 Le modèle physique se trouve dans
 `SimulationEnvironment::updateBoatDynamics(...)`. Il est volontairement simple.
 
-### Vitesse produite par la voile
+### Vent apparent
+
+Le modèle combine le vent réel et le déplacement du bateau :
+
+```text
+vecteur de vent apparent =
+    vecteur du vent réel - vecteur vitesse du bateau
+```
+
+Toutes les décisions aérodynamiques suivantes utilisent ce vent apparent. Le
+vent ressenti change donc quand le bateau accélère ou change de cap.
+
+### Vitesse produite par l'aile
 
 Le programme calcule l'angle entre le bateau et le vent. Une polaire simplifiée
 attribue ensuite un coefficient de vitesse :
@@ -206,25 +227,62 @@ attribue ensuite un coefficient de vitesse :
 - vent arrière : propulsion possible mais réduite près de l'axe interdit.
 
 La vitesse cible est limitée à environ `2,5 m/s`. La vitesse réelle rejoint
-progressivement cette cible afin d'éviter un changement instantané.
+progressivement cette cible avec une constante de temps de `2 s` en accélération
+et `6 s` en décélération.
 
-### Rotation produite par le gouvernail
+### Compensation mécanique et gouvernail
 
-Le gouvernail crée une vitesse de rotation. Son effet dépend aussi de la vitesse
-du bateau : un gouvernail est moins efficace quand le bateau avance peu.
+La liaison mécanique place naturellement le safran à l'opposé de la moitié du
+vent relatif estimé. La navigation commande la compensation inverse, puis
+ajoute sa correction :
+
+```text
+liaison mécanique = -vent relatif / 2
+commande servo = +vent relatif / 2 + correction
+safran physique = liaison mécanique + commande servo
+                = correction
+```
+
+Le rapport `2:1` cherche à compenser approximativement le moment créé par
+l'aile. En mode direct, la correction vaut zéro : le servo annule la position
+imposée par la liaison et le safran physique revient approximativement dans
+l'axe.
+
+La position physique du safran rejoint sa cible avec une constante de temps de
+`0,7 s`. Sa partie de base est considérée comme compensée par l'aile. L'écart
+autour de cette base produit la rotation, avec une efficacité réduite à faible
+vitesse. La rotation du bateau possède ensuite une inertie de `1 s`.
 
 Le cap est ensuite normalisé entre `0°` et `360°`.
 
-### Déplacement GPS
+Le bateau réel comporte une liaison mécanique `2:1` inversée entre le vent
+relatif à l'aile et le safran. Avec une correction de navigation nulle, le servo
+commande quand même `vent relatif / 2` pour annuler cette liaison et replacer le
+safran physique dans l'axe. Si le vent relatif change rapidement, le retard
+mécanique du safran peut toutefois créer une rotation transitoire.
 
-La distance parcourue pendant un pas vaut approximativement :
+Dans la page HTML, l'axe rouge représente la position physique complète :
 
 ```text
-distance = vitesse × durée du pas
+angle physique du safran =
+    -vent relatif / 2 + commande servo
 ```
 
-Cette distance est projetée vers le nord et l'est selon le cap, puis convertie
-en variation de latitude et de longitude.
+La jauge « Commande servo safran » affiche la compensation et la correction.
+
+### Dérive et déplacement GPS
+
+Le déplacement comporte une composante vers l'avant et une dérive latérale
+créée par la composante transversale du vent apparent :
+
+```text
+vitesse sol =
+    vitesse avant selon le cap
+    + vitesse de dérive latérale
+```
+
+La dérive est limitée à `0,35 m/s`. Les deux composantes sont projetées vers le
+nord et l'est, puis converties en latitude et longitude.
 
 ## 8. Temps simulé
 
@@ -240,9 +298,10 @@ boat.runSimulation(60 * 60 * 1000UL, 100);
 
 Cet exemple simule une heure avec un calcul toutes les `100 ms`.
 
-Un petit pas donne une trajectoire plus détaillée mais demande davantage de
-calculs et de mémoire. Un grand pas accélère les longues simulations mais
-réduit la précision.
+Les inerties physiques utilisent une réponse exponentielle liée au temps. Elles
+restent donc comparables quand le pas change. Un petit pas donne toutefois une
+trajectoire et des décisions de navigation plus détaillées, tandis qu'un grand
+pas réduit la précision de la boucle de contrôle.
 
 ## 9. Historique et export HTML
 
@@ -289,20 +348,17 @@ communications et les erreurs matérielles par des équivalents simplifiés.
 
 Il faut garder ces limites en tête lors de l'interprétation :
 
-- pas de courant marin, vagues, rafales ni dérive latérale réaliste ;
-- aucune imprécision GPS ou magnétique ;
+- pas de courant marin, vagues ni rafales ;
+- dérive latérale simplifiée, sans quille ni hydrodynamique détaillée ;
+- bruit capteur déterministe, pas issu d'un modèle de récepteur GPS réel ;
 - réponse de voile et de gouvernail simplifiée ;
 - vitesse maximale arbitraire ;
-- certaines évolutions dépendent du nombre d'itérations autant que du temps ;
-- le calcul local de distance dans `sim_environment.cpp` simplifie trop la
-  longitude, surtout loin de l'équateur ;
+- les commandes de navigation par pas de `5°` dépendent encore de la fréquence
+  d'appel, même si les inerties physiques dépendent maintenant du temps ;
+- le rapport `2:1`, les inerties et le gain de rotation doivent être calibrés
+  sur le MEA réel ;
 - la simulation teste directement `navigation.h`, pas le sélecteur du firmware ;
 - atteindre un waypoint en simulation ne garantit pas le même résultat en mer.
-
-Le calcul de longitude est une limite particulièrement importante : un degré de
-longitude ne représente pas la même distance qu'un degré de latitude. La
-navigation partagée utilise un calcul plus correct, mais certaines informations
-affichées par l'environnement peuvent être légèrement différentes.
 
 ## 12. Ordre de lecture conseillé
 

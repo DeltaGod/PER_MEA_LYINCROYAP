@@ -98,7 +98,7 @@ private:
     double windDirection;
     double initialWindDirection;
     float sailAngle;                  // Angle voile courant (accumulé par navigation.h)
-    float rudderAngle;                // Angle gouvernail courant (accumulé par navigation.h)
+    float rudderAngle;                // Commande servo: compensation + correction
 
     // Observation du vent : position de départ (simule currentWptLat/Lng)
     double windObsStartLat;

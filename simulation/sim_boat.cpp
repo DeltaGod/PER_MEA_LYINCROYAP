@@ -14,6 +14,24 @@
 #include <iomanip>
 #include <iostream>
 
+namespace {
+constexpr double SIM_EARTH_RADIUS_M = 6371000.0;
+
+void computePathFromPosition(double fromLat, double fromLng, double toLat,
+                             double toLng, double &distanceM,
+                             double &headingDeg) {
+  const double meanLatRad = (fromLat + toLat) * 0.5 * M_PI / 180.0;
+  const double northM =
+      (toLat - fromLat) * M_PI / 180.0 * SIM_EARTH_RADIUS_M;
+  const double eastM = (toLng - fromLng) * M_PI / 180.0 *
+                       SIM_EARTH_RADIUS_M * std::cos(meanLatRad);
+  distanceM = std::hypot(eastM, northM);
+  headingDeg = std::atan2(eastM, northM) * 180.0 / M_PI;
+  if (headingDeg < 0.0)
+    headingDeg += 360.0;
+}
+}
+
 SimulatedBoat::SimulatedBoat()
     : currentWaypointId(-1), boatMode("standby"), windDirection(0),
       initialWindDirection(0), sailAngle(-10), rudderAngle(20),
@@ -65,17 +83,12 @@ void SimulatedBoat::startWindObservation() {
   if (boatMode == "setup-ready") {
     boatMode = "wind-observation";
     // Comme dans boat.ino : on mémorise la position de départ
-    const SimBoatState &s = environment.getState();
-    windObsStartLat = s.latitude;
-    windObsStartLng = s.longitude;
-    // Placer l'aileron du bon côté selon le vent relatif au cap actuel
-    double relWind = windDirection - s.heading;
-    while (relWind > 180)
-      relWind -= 360;
-    while (relWind < -180)
-      relWind += 360;
-    sailAngle = (relWind >= 0) ? 10 : -10;
-    rudderAngle = 0; // pas de déphasage → le bateau va droit
+    const SimSensorState &sensor = environment.getSensorState();
+    windObsStartLat = sensor.latitude;
+    windObsStartLng = sensor.longitude;
+    // La procédure suppose que le bateau est placé à +90° du vent.
+    sailAngle = 10;
+    rudderAngle = 45;
     environment.setServoAngles(sailAngle, rudderAngle);
     std::cout << "[BOAT] Starting wind observation (REAL CODE)..."
               << " aileron=" << sailAngle << std::endl;
@@ -87,8 +100,13 @@ void SimulatedBoat::startNavigation() {
       !waypoints.empty()) {
     currentWaypointId = 0;
     boatMode = "navigate";
-    // Réinitialiser le déphasage safran pour la navigation
-    rudderAngle = 0;
+    const SimSensorState &sensor = environment.getSensorState();
+    double relativeWind = windDirection - sensor.heading;
+    while (relativeWind > 180)
+      relativeWind -= 360;
+    while (relativeWind < -180)
+      relativeWind += 360;
+    rudderAngle = static_cast<float>(relativeWind / 2.0);
     nav_resetState(navState);
     std::cout << "[BOAT] Navigation started (REAL CODE), heading to waypoint 0"
               << std::endl;
@@ -109,6 +127,7 @@ void SimulatedBoat::stopNavigation() {
 // ════════════════════════════════════════════════════════════════
 void SimulatedBoat::updateNavigationLogic() {
   const SimBoatState &state = environment.getState();
+  const SimSensorState &sensor = environment.getSensorState();
 
   if (boatMode == "wind-observation") {
     // ──── OBSERVATION DU VENT (code réel via navigation.h) ────
@@ -118,25 +137,32 @@ void SimulatedBoat::updateNavigationLogic() {
     // (simule gpsBoat.computeDirectPath(currentWptLat, currentWptLng) +
     // getDist())
     double distToStart, headingToStart;
-    environment.computeDistanceToWaypoint(windObsStartLat, windObsStartLng,
-                                          distToStart, headingToStart);
+    computePathFromPosition(sensor.latitude, sensor.longitude, windObsStartLat,
+                            windObsStartLng, distToStart, headingToStart);
 
     // Appel de la VRAIE fonction d'observation du vent
     NavResult r = nav_handleWindObservation(
-        state.latitude, state.longitude, windObsStartLat, windObsStartLng,
-        state.heading, // smoothHeading en simulation = heading exact
+        sensor.latitude, sensor.longitude, windObsStartLat, windObsStartLng,
+        sensor.heading,
         distToStart, WIND_DISTANCE_SIM, sailAngle, rudderAngle);
 
     // Appliquer les angles
     sailAngle = r.sailAngle;
     rudderAngle = r.rudderAngle;
     float clampedSail = std::max(-10.0f, std::min(10.0f, sailAngle));
-    float clampedRudder = std::max(-45.0f, std::min(45.0f, rudderAngle));
+    float clampedRudder = std::max(-110.0f, std::min(110.0f, rudderAngle));
     environment.setServoAngles(clampedSail, clampedRudder);
 
     if (r.windAcquired) {
       boatMode = "wind-ready";
       windDirection = r.acquiredWindDir;
+      double relativeWind = windDirection - sensor.heading;
+      while (relativeWind > 180)
+        relativeWind -= 360;
+      while (relativeWind < -180)
+        relativeWind += 360;
+      rudderAngle = static_cast<float>(relativeWind / 2.0);
+      environment.setServoAngles(sailAngle, rudderAngle);
       std::cout << "[BOAT] Wind acquired (REAL CODE): " << windDirection
                 << " deg" << std::endl;
     }
@@ -146,19 +172,19 @@ void SimulatedBoat::updateNavigationLogic() {
 
     // Simuler gpsBoat.computeDirectPath(currentWptLat, currentWptLng)
     double distance, wptHeading;
-    environment.computeDistanceToWaypoint(wpt.lat, wpt.lng, distance,
-                                          wptHeading);
+    computePathFromPosition(sensor.latitude, sensor.longitude, wpt.lat, wpt.lng,
+                            distance, wptHeading);
 
     // Appel de la VRAIE fonction de navigation
     NavResult r = nav_handleNavigationWithState(
         navState,
-        state.heading, // gpsBoat.getSmoothHeading()
+        sensor.heading,
         wptHeading,    // gpsBoat.getHeading() (cap vers WPT)
         distance,      // gpsBoat.getDist()
         windDirection, // variable globale
         sailAngle,     // angle courant (peut être accumulé)
         rudderAngle,   // angle courant (peut être accumulé)
-        WAYPOINT_DISTANCE_SIM, state.latitude, state.longitude, wpt.lat,
+        WAYPOINT_DISTANCE_SIM, sensor.latitude, sensor.longitude, wpt.lat,
         wpt.lng, NAV_DEFAULT_CORRIDOR_HALF_WIDTH_M);
 
     // Stocker les résultats bruts (comme les variables globales du vrai bateau)
@@ -169,7 +195,7 @@ void SimulatedBoat::updateNavigationLogic() {
     // (identique au comportement réel : servoControl.setRudderAngle() clamp
     // [-45,+45])
     float clampedSail = std::max(-10.0f, std::min(10.0f, sailAngle));
-    float clampedRudder = std::max(-45.0f, std::min(45.0f, rudderAngle));
+    float clampedRudder = std::max(-110.0f, std::min(110.0f, rudderAngle));
     environment.setServoAngles(clampedSail, clampedRudder);
 
     // Mapper le mode de navigation réel → navMode pour export HTML
@@ -201,7 +227,12 @@ void SimulatedBoat::updateNavigationLogic() {
     if (r.waypointReached) {
       if (currentWaypointId < (int)waypoints.size() - 1) {
         currentWaypointId++;
-        rudderAngle = 0; // reset pour le nouveau WPT
+        double relativeWind = windDirection - sensor.heading;
+        while (relativeWind > 180)
+          relativeWind -= 360;
+        while (relativeWind < -180)
+          relativeWind += 360;
+        rudderAngle = static_cast<float>(relativeWind / 2.0);
         std::cout << "[NAV-REAL] Waypoint " << (currentWaypointId - 1)
                   << " reached! Moving to waypoint " << currentWaypointId
                   << std::endl;

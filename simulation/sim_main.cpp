@@ -14,7 +14,7 @@ ScenarioData runScenario1() {
   boat.init(48.340, -4.520, 0, 4.0, 90);
   boat.addWaypoint(48.34, -4.510);
   boat.startWindObservation();
-  boat.runSimulation(60000, 100);
+  boat.runSimulation(60, 100);
   boat.setWindDirection(0);
   boat.startNavigation();
   boat.runSimulation(6400000, 100);
@@ -158,8 +158,8 @@ ScenarioData runScenario7() {
   constexpr unsigned long SEVEN_DAYS_MS = 7UL * 24UL * 60UL * 60UL * 1000UL;
   boat.runSimulation(SEVEN_DAYS_MS, 1000);
 
-  return {"S7 Tour de la rade de Brest",
-          boat.getHistory(), boat.getWaypointPairs(), boat.getInitialWindDir(),
+  return {"S7 Tour de la rade de Brest", boat.getHistory(),
+          boat.getWaypointPairs(), boat.getInitialWindDir(),
           boat.getWindSpeed()};
 }
 
