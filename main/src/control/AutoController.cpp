@@ -88,12 +88,13 @@ void AutoController::reset() {
 }
 
 void AutoController::beginWindObservation() {
-    windObsComplete_ = false;
-    obsStarted_      = false;
-    observedWindDeg_ = 0.0f;
-    smoothHeading_   = 0.0f;
-    navMode_         = "wind-observation";
-    navMessage_      = "waiting for GPS fix...";
+    windObsComplete_    = false;
+    obsStarted_         = false;
+    windObsProgressPct_ = 0;
+    observedWindDeg_    = 0.0f;
+    smoothHeading_      = 0.0f;
+    navMode_            = "wind-observation";
+    navMessage_         = "waiting for GPS fix...";
 }
 
 ActuatorCommand AutoController::observeWind(const GpsPosition& pos) {
@@ -121,6 +122,12 @@ ActuatorCommand AutoController::observeWind(const GpsPosition& pos) {
     }
 
     double dist = Navigator::distanceM(obsStartLat_, obsStartLon_, pos.lat, pos.lon);
+
+    // Progression 0–100 % de la distance requise.
+    double pct = dist / (double)Calibration::WIND_OBS_DISTANCE_M * 100.0;
+    if (pct < 0.0)   pct = 0.0;
+    if (pct > 100.0) pct = 100.0;
+    windObsProgressPct_ = (uint8_t)pct;
 
     NavResult r = nav_handleWindObservation(
         pos.lat, pos.lon, obsStartLat_, obsStartLon_,
@@ -150,10 +157,10 @@ static uint16_t clampEscUs(int32_t us) {
 }
 
 
-static uint16_t computeAutoPropulsionUs (const GpsPosition& pos,
-                                         float distM,
-                                         float bearingDeg, 
-                                         float waypointRadiusM) 
+uint16_t AutoController::computeAutoPropulsionUs(const GpsPosition& pos,
+                                                 float distM,
+                                                 float bearingDeg,
+                                                 float waypointRadiusM)
 {
     
     if (!pos.valid) {

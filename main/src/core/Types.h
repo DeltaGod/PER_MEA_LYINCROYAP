@@ -2,10 +2,10 @@
 #include <Arduino.h>
 
 enum class ControlMode : uint8_t {
-    Failsafe    = 0,  // RC signal absent or invalid — all actuators to safe neutral
-    ManualServo = 1,  // CH2 → sail (binary ±10°), CH4 → rotor winch (direct)
-    ManualProp  = 2,  // CH3 → throttle, CH4 → differential steering
-    Automatic   = 3   // GPS + waypoints autonomous sailing
+    Failsafe  = 0,  // RC signal absent or invalid — follows mission (auto fallback)
+    Sail      = 1,  // CH5 middle position — inert: all actuators to safe neutral
+    Manual    = 2,  // CH5 high — full manual: CH2 sail, CH4 rotor, CH3 propeller (inverse)
+    Automatic = 3   // GPS + waypoints autonomous sailing
 };
 
 // Raw RC pulse widths in microseconds. Value 0 means channel signal is lost.

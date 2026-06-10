@@ -1,18 +1,19 @@
 #!/bin/bash
-# Démarre la pile complète AutoBoat IHM : MongoDB, serial_link.py, webserver.py, navigateur.
+# Démarre la pile complète AutoBoat IHM, À PARTIR DE ZÉRO :
+# nettoyage total (stop_ihm.sh) puis MongoDB, serial_link.py, webserver.py, navigateur.
 #
 # Usage :
-#   ./start_ihm.sh                  — utilise le port défini dans .env
-#   ./start_ihm.sh /dev/ttyUSB0    — force le port série (prioritaire sur .env)
-#   ./start_ihm.sh /dev/ttyUSB1    — idem avec un autre port
-
-set -euo pipefail
+#   ./start_ihm.sh                 — port transceiver auto-détecté (numéro de série)
+#   ./start_ihm.sh /dev/ttyUSB0    — force le port série
+#
+# Pas de "set -e" : on gère les erreurs explicitement (plus robuste ici).
 
 IHM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_PYTHON="$IHM_DIR/.venv/bin/python"
 COMPOSE_FILE="$IHM_DIR/docker-compose.yml"
+SERIAL_LOG="/tmp/autoboat_serial.log"
+SERVER_LOG="/tmp/autoboat_webserver.log"
 
-# ── Couleurs ──────────────────────────────────────────────────────────────────
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RED='\033[0;31m'; NC='\033[0m'
 ok()   { echo -e "${GREEN}[OK]${NC}  $*"; }
 info() { echo -e "${YELLOW}[..]${NC}  $*"; }
@@ -24,17 +25,13 @@ echo "   AutoBoat IHM — démarrage"
 echo "════════════════════════════════════════"
 
 # ── Port série ────────────────────────────────────────────────────────────────
-# Un argument CLI remplace SERIAL_PORT_REAL depuis .env.
-# python-dotenv ne remplace pas les variables déjà exportées dans le shell,
-# donc les sous-processus héritent de la valeur forcée ici.
 if [[ $# -ge 1 ]]; then
-    export SERIAL_PORT_REAL="$1"
+    export SERIAL_PORT_OVERRIDE="$1"
     export SIMULATION="false"
-    ok "Port série (argument CLI) : $SERIAL_PORT_REAL"
+    ok "Port série forcé (argument CLI) : $SERIAL_PORT_OVERRIDE"
 else
-    PORT_ENV=$(grep -oP '(?<=SERIAL_PORT_REAL=)\S+' "$IHM_DIR/.env" 2>/dev/null || echo "/dev/ttyUSB0")
-    info "Port série (depuis .env) : $PORT_ENV"
-    info "Pour changer : $0 /dev/ttyUSBx"
+    info "Port série : auto-détection du transceiver par numéro de série"
+    info "Pour forcer un port : $0 /dev/ttyUSBx"
 fi
 
 # ── Vérification du venv ──────────────────────────────────────────────────────
@@ -44,74 +41,74 @@ if [[ ! -x "$VENV_PYTHON" ]]; then
     exit 1
 fi
 
-# ── 1. MongoDB ────────────────────────────────────────────────────────────────
-info "Démarrage MongoDB (Docker)..."
-docker compose -f "$COMPOSE_FILE" up -d 2>&1 | grep -E "Started|Running|Created|error" || true
-
-for i in $(seq 1 20); do
-    "$VENV_PYTHON" -c \
-        "import socket; socket.create_connection(('localhost', 27017), 1)" \
-        2>/dev/null && break
-    sleep 1
-    [[ $i -eq 20 ]] && { err "MongoDB n'a pas démarré. Vérifier : docker compose -f $COMPOSE_FILE logs"; exit 1; }
-done
-ok "MongoDB prêt sur :27017"
-
-# ── 2. serial_link.py ─────────────────────────────────────────────────────────
-info "Arrêt de l'instance précédente serial_link.py..."
-pkill -f "serial_link.py" 2>/dev/null && sleep 0.8 || true
-
-info "Démarrage serial_link.py..."
-cd "$IHM_DIR"
-nohup "$VENV_PYTHON" app/serial_link.py \
-    >> /tmp/autoboat_serial.log 2>&1 &
-SERIAL_PID=$!
+# ── 0. Nettoyage complet (réutilise stop_ihm.sh — source unique de vérité) ────
+info "Nettoyage des instances précédentes..."
+bash "$IHM_DIR/stop_ihm.sh" >/dev/null 2>&1
 sleep 1
 
+# Logs frais (évite de lire d'anciennes lignes).
+: > "$SERIAL_LOG"
+: > "$SERVER_LOG"
+
+cd "$IHM_DIR" || { err "cd $IHM_DIR a échoué"; exit 1; }
+
+# ── 1. MongoDB ────────────────────────────────────────────────────────────────
+info "Démarrage MongoDB (Docker)..."
+docker compose -f "$COMPOSE_FILE" up -d >/dev/null 2>&1
+for i in $(seq 1 20); do
+    if "$VENV_PYTHON" -c "import socket; socket.create_connection(('localhost', 27017), 1)" 2>/dev/null; then
+        ok "MongoDB prêt sur :27017"
+        break
+    fi
+    sleep 1
+    if [[ $i -eq 20 ]]; then
+        err "MongoDB n'a pas démarré. Vérifier : docker compose -f $COMPOSE_FILE logs"
+        exit 1
+    fi
+done
+
+# ── 2. serial_link.py (-u : logs non bufferisés, lisibles en direct) ──────────
+info "Démarrage serial_link.py..."
+nohup "$VENV_PYTHON" -u app/serial_link.py >> "$SERIAL_LOG" 2>&1 &
+SERIAL_PID=$!
+sleep 1.5
 if kill -0 "$SERIAL_PID" 2>/dev/null; then
-    ok "serial_link.py  PID $SERIAL_PID  →  /tmp/autoboat_serial.log"
+    ok "serial_link.py  PID $SERIAL_PID  →  $SERIAL_LOG"
 else
-    err "serial_link.py a planté au démarrage. Consulter /tmp/autoboat_serial.log"
-    tail -10 /tmp/autoboat_serial.log
+    err "serial_link.py a planté au démarrage. Dernières lignes :"
+    tail -10 "$SERIAL_LOG"
     exit 1
 fi
 
-# ── 3. webserver.py ───────────────────────────────────────────────────────────
-info "Arrêt de l'instance précédente webserver.py..."
-pkill -f "webserver.py" 2>/dev/null && sleep 0.8 || true
-
+# ── 3. webserver.py (-u) ──────────────────────────────────────────────────────
 info "Démarrage webserver.py..."
-nohup "$VENV_PYTHON" app/webserver.py \
-    >> /tmp/autoboat_webserver.log 2>&1 &
+nohup "$VENV_PYTHON" -u app/webserver.py >> "$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
-
 for i in $(seq 1 15); do
-    "$VENV_PYTHON" -c \
-        "import urllib.request; urllib.request.urlopen('http://localhost:5000', timeout=1)" \
-        2>/dev/null && break
+    if "$VENV_PYTHON" -c "import urllib.request; urllib.request.urlopen('http://localhost:5000', timeout=1)" 2>/dev/null; then
+        ok "Serveur web  PID $SERVER_PID  →  http://localhost:5000"
+        break
+    fi
     sleep 1
-    [[ $i -eq 15 ]] && {
-        err "Le serveur web n'a pas répondu. Consulter /tmp/autoboat_webserver.log"
-        tail -10 /tmp/autoboat_webserver.log
+    if [[ $i -eq 15 ]]; then
+        err "Le serveur web n'a pas répondu. Dernières lignes :"
+        tail -10 "$SERVER_LOG"
         exit 1
-    }
+    fi
 done
-ok "Serveur web  PID $SERVER_PID  →  http://localhost:5000"
 
 # ── 4. Navigateur ────────────────────────────────────────────────────────────
 info "Ouverture du navigateur..."
-xdg-open http://localhost:5000 2>/dev/null \
-    || open   http://localhost:5000 2>/dev/null \
-    || err "Impossible d'ouvrir automatiquement — naviguer vers http://localhost:5000"
+xdg-open http://localhost:5000 >/dev/null 2>&1 \
+    || open http://localhost:5000 >/dev/null 2>&1 \
+    || err "Ouvrir manuellement : http://localhost:5000"
 
 echo ""
 echo "════════════════════════════════════════"
 ok "IHM opérationnelle"
 echo "   Navigateur  →  http://localhost:5000"
-echo "   Logs :"
-echo "     tail -f /tmp/autoboat_serial.log"
-echo "     tail -f /tmp/autoboat_webserver.log"
-echo ""
-echo "   Pour arrêter :"
-echo "     ./stop_ihm.sh"
+echo "   Logs (en direct) :"
+echo "     tail -f $SERIAL_LOG"
+echo "     tail -f $SERVER_LOG"
+echo "   Arrêter : ./stop_ihm.sh"
 echo "════════════════════════════════════════"

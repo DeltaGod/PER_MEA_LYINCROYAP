@@ -22,18 +22,21 @@ void LoRaComm::update() {
 void LoRaComm::sendHeartbeat(ControlMode mode, MissionState mState,
                               double lat, double lon, float heading,
                               float batVolts, uint8_t wptCur, uint8_t wptTotal,
-                              float windDeg, uint16_t sailUs, uint16_t rotorUs) {
+                              float windDeg, uint16_t sailUs, uint16_t rotorUs,
+                              bool gpsFix, uint8_t sats, float hdop, bool rcOk,
+                              bool windObs, uint8_t windObsPct) {
     const char* modeStr;
-    const char* ctrlMode;
 
     if (mode == ControlMode::Automatic || mode == ControlMode::Failsafe) {
-        ctrlMode = "autonomous";
         modeStr  = (mState == MissionState::Running || mState == MissionState::Returning)
                    ? "navigate" : "route-ready";
     } else {
-        ctrlMode = "radio";
         modeStr  = "standby";
     }
+
+    // control_mode supprimé du heartbeat : 100 % redondant avec "mode"
+    // (standby ⟺ radio, route-ready/navigate ⟺ autonomous). L'IHM le déduit.
+    // Cela libère ~28 octets pour rester sous la limite LoRa de 255 octets.
 
     // Sail: binaire ±10° selon position par rapport au centre
     const int8_t sailDeg = (sailUs >= Calibration::SAIL_CENTER_US) ? 10 : -10;
@@ -45,21 +48,32 @@ void LoRaComm::sendHeartbeat(ControlMode mode, MissionState mState,
         * (2.0f * Calibration::ROTOR_RANGE_DEG)
     );
 
-    char buf[256];
+    // Fragment optionnel : progression de la mesure de vent (présent seulement
+    // pendant la mesure, pour économiser des octets le reste du temps).
+    char wobsFrag[16] = "";
+    if (windObs) {
+        snprintf(wobsFrag, sizeof(wobsFrag), ",\"wobs\":%u", (unsigned)windObsPct);
+    }
+
+    // Réductions de taille : heading entier, location 5 décimales (~1.1 m),
+    // waypoints aplati en "wt"/"wc". L'IHM lit ces clés.
+    char buf[320];
     snprintf(buf, sizeof(buf),
         "{\"origin\":\"boat\",\"type\":\"info\",\"message\":{"
         "\"mode\":\"%s\","
-        "\"location\":[%.6f,%.6f],"
+        "\"location\":[%.5f,%.5f],"
         "\"servos\":{\"sail\":%d,\"rudder\":%d},"
-        "\"control_mode\":\"%s\","
-        "\"heading\":%.1f,"
+        "\"heading\":%.0f,"
         "\"wind\":%.0f,"
         "\"bat\":%.2f,"
-        "\"waypoints\":{\"total\":%u,\"current\":%u}"
+        "\"fix\":%d,\"sat\":%u,\"hdop\":%.1f,\"rc\":%d,"
+        "\"wt\":%u,\"wc\":%u"
+        "%s"
         "}}",
         modeStr, lat, lon, (int)sailDeg, (int)rotorDeg,
-        ctrlMode, heading, windDeg, batVolts,
-        (unsigned)wptTotal, (unsigned)wptCur);
+        heading, windDeg, batVolts,
+        gpsFix ? 1 : 0, (unsigned)sats, hdop, rcOk ? 1 : 0,
+        (unsigned)wptTotal, (unsigned)wptCur, wobsFrag);
 
     if (!radio_) return;
     if (radio_->send(buf)) {

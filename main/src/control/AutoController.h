@@ -27,8 +27,10 @@ public:
     // the wind direction is latched and windObsComplete() returns true.
     void beginWindObservation();
     ActuatorCommand observeWind(const GpsPosition& pos);
-    bool  windObsComplete() const { return windObsComplete_; }
-    float observedWindDeg() const { return observedWindDeg_; }
+    bool    windObsComplete()    const { return windObsComplete_; }
+    float   observedWindDeg()    const { return observedWindDeg_; }
+    // Progression de la mesure de vent en % (0–100) de WIND_OBS_DISTANCE_M.
+    uint8_t windObsProgressPct() const { return windObsProgressPct_; }
 
     const char* navMode()    const { return navMode_; }
     const char* navMessage() const { return navMessage_; }
@@ -45,9 +47,10 @@ private:
     float       sailAngle_   = 0.0f;
 
     // Wind observation state
-    bool        windObsComplete_ = false;
-    bool        obsStarted_      = false;
-    float       observedWindDeg_ = 0.0f;
+    bool        windObsComplete_    = false;
+    bool        obsStarted_         = false;
+    uint8_t     windObsProgressPct_ = 0;
+    float       observedWindDeg_    = 0.0f;
     double      obsStartLat_     = 0.0;
     double      obsStartLon_     = 0.0;
     float       smoothHeading_   = 0.0f;

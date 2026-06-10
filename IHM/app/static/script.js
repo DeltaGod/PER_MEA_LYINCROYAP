@@ -17,9 +17,38 @@ let restartButton = document.getElementById('restartButton');
 let startButton = document.getElementById('startButton');
 let resetCommunicationsButton = document.getElementById('resetCommunicationsButton');
 
+// Panneau de santé / diagnostic
+let healthLinkDot = document.getElementById("healthLinkDot");
+let healthLinkValue = document.getElementById("healthLinkValue");
+let healthGpsDot = document.getElementById("healthGpsDot");
+let healthGpsValue = document.getElementById("healthGpsValue");
+let healthBatDot = document.getElementById("healthBatDot");
+let healthBatValue = document.getElementById("healthBatValue");
+let healthRcDot = document.getElementById("healthRcDot");
+let healthRcValue = document.getElementById("healthRcValue");
+let healthModeDot = document.getElementById("healthModeDot");
+let healthModeValue = document.getElementById("healthModeValue");
+
+// Bascule Simulation / Réel
+let modeToggle = document.getElementById("modeToggle");
+
+// Reconnexion / reset transceiver
+let resetTransceiverButton = document.getElementById("resetTransceiverButton");
+
+// Mesure du vent — barre de progression
+let windObsSection = document.getElementById("windObsSection");
+let windObsBar = document.getElementById("windObsBar");
+let windObsValue = document.getElementById("windObsValue");
+
 let boatMarker;     // The current boat location
 let boatRoute;      // The route history for the boat
 let pollingIntervalId = null;
+
+// Suivi de fraîcheur des messages (détection perte de liaison)
+let lastSeenTimestamp = null;   // dernier timestamp bateau vu
+let lastFreshMs = null;         // instant (Date.now) du dernier message NEUF
+let lastBoatMessage = null;     // dernier message non vide reçu
+let healthWarning = document.getElementById("healthWarning");
 
 // Etat de la batterie
 let progressBattery = document.getElementById("progressBattery");
@@ -56,13 +85,27 @@ function pollBoatMessages() {
     }).then(data => {
         const message = data.message || {};
         //console.log('Data received:', data); // Handle the data
-        
+
+        // Détection de fraîcheur : un nouveau timestamp = message neuf reçu.
+        // L'API renvoie toujours le dernier message connu, même s'il est ancien,
+        // donc on compare le timestamp plutôt que la simple présence de données.
+        if (data.timestamp && data.timestamp !== lastSeenTimestamp) {
+            lastSeenTimestamp = data.timestamp;
+            lastFreshMs = Date.now();
+        }
+        if (Object.keys(message).length > 0) {
+            lastBoatMessage = message;
+        }
+        refreshLinkHealth();
+
         if (data.hasOwnProperty('timestamp')) {
             updateBoatLastTime(data.timestamp);
         }
         if (Object.keys(message).length === 0) {
             return;
         }
+
+        updateHealth(message);
         if (message.hasOwnProperty('mode')) {
             updateBoatMode(message.mode);
         }
@@ -78,8 +121,22 @@ function pollBoatMessages() {
         if (message.hasOwnProperty('wind')) {
             updateWindDirection(message.wind);
         }
-        if (message.hasOwnProperty('waypoints')) {
+        // Waypoints — format aplati "wt"/"wc" (ancien "waypoints":{total,current} en repli).
+        if (message.hasOwnProperty('wt')) {
+            updateWaypoints(message.wt, message.wc);
+        } else if (message.hasOwnProperty('waypoints')) {
             updateWaypoints(message.waypoints.total, message.waypoints.current);
+        }
+        // Mesure du vent en cours : barre de progression.
+        updateWindObs(message.hasOwnProperty('wobs') ? message.wobs : null);
+
+        // Alimente la prédiction de trajectoire (si la carte est prête).
+        if (message.hasOwnProperty('location') && typeof feedTelemetry === 'function') {
+            const loc = message.location;
+            const wpIdx = message.hasOwnProperty('wc')
+                ? message.wc
+                : (message.waypoints ? message.waypoints.current : 0);
+            feedTelemetry(loc[0], loc[1], message.heading, message.wind, wpIdx);
         }
         if (message.hasOwnProperty('battery')) {
             updateBattery(message.battery);
@@ -113,6 +170,243 @@ function stopMessagePolling() {
 }
 
 startMessagePolling();
+
+
+/////////////////////////////////////////////////////////////////////////////
+// Panneau de santé / diagnostic
+/////////////////////////////////////////////////////////////////////////////
+
+function setHealth(dot, valueEl, level, text) {
+    dot.classList.remove("ok", "warn", "bad", "unknown", "radio");
+    dot.classList.add(level);
+    if (valueEl) {
+        valueEl.textContent = text;
+    }
+}
+
+// Liaison : basée sur l'âge du dernier message NEUF reçu.
+// L'API renvoie toujours le dernier message connu (même ancien),
+// donc on mesure le temps écoulé depuis le dernier changement de timestamp.
+function refreshLinkHealth() {
+    let level;
+
+    if (lastFreshMs === null) {
+        setHealth(healthLinkDot, healthLinkValue, "unknown", "en attente…");
+        level = "unknown";
+    } else {
+        const ageMs = Date.now() - lastFreshMs;
+        const ageS = Math.round(ageMs / 1000);
+
+        if (ageMs < 3000) {
+            // Liaison fraîche : on affiche le RSSI (injecté par le transceiver).
+            const rssi = (lastBoatMessage && lastBoatMessage.rssi != null)
+                ? Number(lastBoatMessage.rssi) : null;
+            if (rssi === null) {
+                setHealth(healthLinkDot, healthLinkValue, "ok", "OK");
+            } else if (rssi <= -110) {
+                setHealth(healthLinkDot, healthLinkValue, "warn", rssi + " dBm (faible)");
+            } else {
+                setHealth(healthLinkDot, healthLinkValue, "ok", rssi + " dBm");
+            }
+            level = "ok";
+        } else if (ageMs < 10000) {
+            setHealth(healthLinkDot, healthLinkValue, "warn", ageS + " s");
+            level = "warn";
+        } else {
+            setHealth(healthLinkDot, healthLinkValue, "bad", "perdue (" + ageS + " s)");
+            level = "bad";
+        }
+    }
+
+    // Si la liaison est perdue, les autres paramètres ne sont plus à jour →
+    // on les passe en jaune + avertissement. (L'attente initiale et un léger
+    // retard ne déclenchent pas l'alerte.)
+    const reliable = (level !== "bad");
+    applyReliability(reliable);
+}
+
+// Marque les paramètres bateau comme fiables (vraies couleurs) ou non (jaune).
+function applyReliability(reliable) {
+    if (reliable) {
+        if (healthWarning) {
+            healthWarning.style.display = "none";
+        }
+        // Restaure les vraies couleurs à partir du dernier message connu.
+        if (lastBoatMessage) {
+            updateHealth(lastBoatMessage);
+        }
+    } else {
+        if (healthWarning) {
+            healthWarning.style.display = "";
+        }
+        // Force en jaune : les valeurs affichées ne sont plus fiables.
+        [healthGpsDot, healthBatDot, healthRcDot, healthModeDot].forEach((dot) => {
+            dot.classList.remove("ok", "bad", "unknown", "radio");
+            dot.classList.add("warn");
+        });
+    }
+}
+
+// GPS, batterie, RC, contrôle : à partir du dernier message.
+function updateHealth(message) {
+    // GPS — basé sur fix / sat / hdop (champs envoyés par le bateau).
+    if (message.hasOwnProperty("fix")) {
+        const fix = Number(message.fix);
+        const sat = Number(message.sat);
+        const hdop = Number(message.hdop);
+
+        if (!fix) {
+            setHealth(healthGpsDot, healthGpsValue, "bad", "pas de fix");
+        } else {
+            // Fix présent : vert si précision correcte, jaune si dégradée.
+            const good = (sat >= 5 && hdop <= 2.5);
+            setHealth(
+                healthGpsDot,
+                healthGpsValue,
+                good ? "ok" : "warn",
+                sat + " sat, hdop " + (Number.isNaN(hdop) ? "?" : hdop.toFixed(1))
+            );
+        }
+    }
+
+    // Batterie — seuils LiPo 2S.
+    if (message.hasOwnProperty("bat")) {
+        const v = Number(message.bat);
+        let level = "unknown";
+        if (!Number.isNaN(v)) {
+            if (v >= 7.0) level = "ok";
+            else if (v >= 6.6) level = "warn";
+            else level = "bad";
+        }
+        setHealth(
+            healthBatDot,
+            healthBatValue,
+            level,
+            Number.isNaN(v) ? "—" : v.toFixed(2) + " V"
+        );
+    }
+
+    // Radio (RC) — rc=1 si le récepteur fournit des impulsions.
+    if (message.hasOwnProperty("rc")) {
+        const rcOk = Number(message.rc) === 1;
+        setHealth(
+            healthRcDot,
+            healthRcValue,
+            rcOk ? "ok" : "bad",
+            rcOk ? "OK" : "perdue"
+        );
+    }
+
+    // Contrôle — déduit de "mode" (control_mode supprimé du heartbeat) :
+    // standby ⟺ radio (manuel, céleste), route-ready/navigate ⟺ auto (vert).
+    if (message.hasOwnProperty("mode")) {
+        const auto = (message.mode !== "standby");
+        setHealth(
+            healthModeDot,
+            healthModeValue,
+            auto ? "ok" : "radio",
+            auto ? "auto" : "radio"
+        );
+    }
+}
+
+// Rafraîchit la liaison même sans nouveau message (pour passer au rouge).
+setInterval(refreshLinkHealth, 1000);
+
+
+/////////////////////////////////////////////////////////////////////////////
+// Bascule Simulation / Réel  (étape 1 : visuel uniquement)
+/////////////////////////////////////////////////////////////////////////////
+
+function applyModeVisibility(mode) {
+    const simOnly = (mode === "sim");
+
+    // Boutons réservés à la simulation
+    if (startButton) {
+        startButton.style.display = simOnly ? "" : "none";
+    }
+    if (resetCommunicationsButton) {
+        resetCommunicationsButton.style.display = simOnly ? "" : "none";
+    }
+
+    // Bouton réservé au mode réel (reset matériel du transceiver)
+    if (resetTransceiverButton) {
+        resetTransceiverButton.style.display = simOnly ? "none" : "";
+    }
+}
+
+function initModeToggle() {
+    const saved = localStorage.getItem("autoboatMode") || "real";
+
+    if (modeToggle) {
+        modeToggle.checked = (saved === "sim");
+    }
+    applyModeVisibility(saved);
+
+    if (modeToggle) {
+        modeToggle.addEventListener("change", async () => {
+            const mode = modeToggle.checked ? "sim" : "real";
+            localStorage.setItem("autoboatMode", mode);
+            applyModeVisibility(mode);
+
+            // En mode réel, on relance serial_link sur le port réel.
+            // En mode sim, l'utilisateur lance la pile via le bouton Start.
+            if (mode === "real") {
+                try {
+                    const response = await fetch("/api/set-mode", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ mode: "real" })
+                    });
+                    if (!response.ok) {
+                        console.error("set-mode réel échoué :", await response.json());
+                        alert("Erreur lors du passage en mode réel.");
+                    }
+                } catch (error) {
+                    console.error("Erreur réseau set-mode :", error);
+                    alert("Impossible de contacter le serveur.");
+                }
+            }
+        });
+    }
+}
+
+initModeToggle();
+
+
+/////////////////////////////////////////////////////////////////////////////
+// Reconnexion PC ↔ transceiver + reset de la carte transceiver
+/////////////////////////////////////////////////////////////////////////////
+
+if (resetTransceiverButton) {
+    resetTransceiverButton.addEventListener("click", async () => {
+        if (!confirm("🔌 Réinitialiser le transceiver et reconnecter ?")) {
+            return;
+        }
+        try {
+            const response = await fetch("/api/reset-transceiver", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({})
+            });
+
+            const result = await response.json();
+
+            if (!response.ok) {
+                console.error("Erreur reset transceiver :", result);
+                alert("Erreur lors de la réinitialisation du transceiver.");
+                return;
+            }
+
+            console.log("Reset transceiver :", result);
+            alert("Transceiver réinitialisé, reconnexion en cours.");
+
+        } catch (error) {
+            console.error("Erreur réseau reset transceiver :", error);
+            alert("Impossible de contacter le serveur.");
+        }
+    });
+}
 
 
 /////////////////////////////////////////////////////////////////////////////
@@ -223,6 +517,30 @@ function updateBoatAngles(newSailAngle, newRudderAngle) {
 // Update the wind direction
 function updateWindDirection(newWindDirection) {
     windDirectionDisplay.textContent = newWindDirection;
+    updateWindCompass(newWindDirection);
+}
+
+// Boussole : la flèche pointe vers la SOURCE du vent (convention firmware :
+// "wind" = direction d'où vient le vent). Carte orientée nord en haut.
+function updateWindCompass(wind) {
+    const compass = document.getElementById("windCompass");
+    const arrow = document.getElementById("wcArrowG");
+    const value = document.getElementById("wcValue");
+    const w = Number(wind);
+
+    if (compass) {
+        compass.classList.toggle("no-data", Number.isNaN(w));
+    }
+    if (Number.isNaN(w)) {
+        if (value) value.textContent = "?";
+        return;
+    }
+    if (arrow) {
+        arrow.setAttribute("transform", "rotate(" + w + " 36 36)");
+    }
+    if (value) {
+        value.textContent = Math.round(w);
+    }
 }
 
 
@@ -235,6 +553,26 @@ function updateWaypoints(newWaypointTotal, newWaypointCurrent) {
 // Update the boat mode
 function updateBoatMode(newBoatMode) {
     boatModeDisplay.textContent = newBoatMode;
+}
+
+// Mesure du vent : affiche la barre de progression tant que "wobs" est présent.
+// pct = null → mesure inactive → on cache la section.
+function updateWindObs(pct) {
+    if (!windObsSection) {
+        return;
+    }
+    if (pct === null || pct === undefined) {
+        windObsSection.style.display = "none";
+        return;
+    }
+    const p = Math.max(0, Math.min(100, Number(pct)));
+    windObsSection.style.display = "";
+    if (windObsBar) {
+        windObsBar.style.width = p + "%";
+    }
+    if (windObsValue) {
+        windObsValue.textContent = p + "%";
+    }
 }
 
 /////////////////////////////////////////////////////////////////////////////

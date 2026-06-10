@@ -388,6 +388,162 @@
 #waypoints-list li button:hover {
     background-color: #e74c3c;
 }
+
+/* =========================================================
+   Panneau de santé / diagnostic
+========================================================= */
+.health-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+}
+
+.health-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+}
+
+.health-dot {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: #9e9e9e;
+    box-shadow: 0 0 3px rgba(0, 0, 0, 0.3);
+    transition: background 0.3s ease;
+}
+
+.health-dot.ok      { background: #27ae60; }
+.health-dot.warn    { background: #f39c12; }
+.health-dot.bad     { background: #c0392b; }
+.health-dot.unknown { background: #9e9e9e; }
+.health-dot.radio   { background: #5dade2; }   /* céleste — mode radio (manuel) */
+
+.health-label {
+    font-weight: 600;
+    min-width: 70px;
+}
+
+.health-value {
+    margin-left: auto;
+    color: #585b5e;
+}
+
+.health-warning {
+    margin-top: 8px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: #fdebd0;
+    border: 1px solid #f39c12;
+    color: #ad6800;
+    font-size: 12px;
+    line-height: 1.3;
+}
+
+/* =========================================================
+   Bascule Simulation / Réel
+========================================================= */
+.mode-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    font-size: 13px;
+    font-weight: 400;
+    color: white;
+}
+
+.mode-toggle .switch {
+    position: relative;
+    width: 46px;
+    height: 24px;
+    flex-shrink: 0;
+}
+
+.mode-toggle .switch input {
+    width: 0;
+    height: 0;
+    opacity: 0;
+}
+
+.mode-toggle .slider {
+    position: absolute;
+    inset: 0;
+    background: #7f8c8d;
+    border-radius: 24px;
+    cursor: pointer;
+    transition: background 0.3s ease;
+}
+
+.mode-toggle .slider::before {
+    content: "";
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 18px;
+    height: 18px;
+    background: white;
+    border-radius: 50%;
+    transition: transform 0.3s ease;
+}
+
+.mode-toggle input:checked + .slider {
+    background: #16a085;
+}
+
+.mode-toggle input:checked + .slider::before {
+    transform: translateX(22px);
+}
+
+/* =========================================================
+   Boussole de vent (coin sup. gauche de la carte)
+========================================================= */
+#windCompass {
+    position: fixed;
+    top: 14px;
+    left: 14px;
+    z-index: 1000;
+
+    width: 96px;
+    padding: 8px 8px 6px;
+
+    background: rgba(255, 255, 255, 0.92);
+    border-radius: 10px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+
+    text-align: center;
+    font-size: 11px;
+    color: #282828;
+}
+
+#windCompass.no-data { opacity: 0.45; }
+
+.wc-rose {
+    position: relative;
+    width: 72px;
+    height: 72px;
+    margin: 0 auto 4px;
+    border: 2px solid #b0b0b0;
+    border-radius: 50%;
+    background: rgba(52, 152, 219, 0.06);
+}
+
+.wc-rose span {
+    position: absolute;
+    font-size: 9px;
+    font-weight: 700;
+    color: #777;
+}
+.wc-n { top: 2px;  left: 50%; transform: translateX(-50%); }
+.wc-s { bottom: 2px; left: 50%; transform: translateX(-50%); }
+.wc-e { top: 50%; right: 4px; transform: translateY(-50%); }
+.wc-w { top: 50%; left: 4px;  transform: translateY(-50%); }
+
+.wc-arrow-g { transition: transform 0.4s ease; }
+
+.wc-label { font-weight: 700; white-space: nowrap; }
     </style>
 
     <!-- Leaflet JS -->
@@ -397,12 +553,42 @@
 <body>
     <main id="map"></main>
 
+    <!-- Boussole : direction D'OÙ VIENT le vent (flèche pointe vers la source) -->
+    <div id="windCompass" class="no-data" aria-label="Direction du vent">
+        <div class="wc-rose">
+            <span class="wc-n">N</span>
+            <span class="wc-e">E</span>
+            <span class="wc-s">S</span>
+            <span class="wc-w">O</span>
+            <svg width="72" height="72" viewBox="0 0 72 72" aria-hidden="true">
+                <g class="wc-arrow-g" id="wcArrowG" transform="rotate(0 36 36)">
+                    <line x1="36" y1="36" x2="36" y2="11" stroke="#c0392b" stroke-width="3" />
+                    <polygon points="36,5 31,16 41,16" fill="#c0392b" />
+                    <circle cx="36" cy="36" r="3" fill="#34495e" />
+                </g>
+            </svg>
+        </div>
+        <div class="wc-label">Vent <span id="wcValue">?</span>°</div>
+    </div>
+
     <!-- =========================================================
          Commandes AutoBoat
     ========================================================== -->
     <section id="command-panel" aria-label="Commandes AutoBoat">
         <div class="bottom-bar">
-            <div class="command-panel-title">AutoBoat Control</div>
+            <div class="command-panel-title">
+                <div>
+                    AutoBoat Control
+                    <div class="mode-toggle">
+                        <span>Réel</span>
+                        <label class="switch">
+                            <input type="checkbox" id="modeToggle">
+                            <span class="slider"></span>
+                        </label>
+                        <span>Sim</span>
+                    </div>
+                </div>
+            </div>
 
             <div class="panel-commands">
                 <div class="top-command-row">
@@ -410,6 +596,7 @@
                     <button id="send-route-btn" type="button">Envoyer la route</button>
                     <button id="clear-route-btn" type="button">Effacer route</button>
                     <button id="resetCommunicationsButton" class="btn-reset" type="button">Réinit coms</button>
+                    <button id="resetTransceiverButton" class="btn-reset" type="button">🔌 Reconnecter TRX</button>
                     <button id="restartButton" class="btn-danger" type="button">🔄 Redémarrer</button>
                 </div>
 
@@ -421,6 +608,7 @@
 
                     <button id="windObservationButton" type="button">📏 Mesure vent</button>
                     <button id="windCommandButton" type="button">🌬️ Envoi vent</button>
+                    <button id="trajectoryButton" type="button">🧭 Trajectoire</button>
                     <button id="navigateButton" class="btn-primary" type="button">🚢 Naviguer</button>
                 </div>
             </div>
@@ -436,6 +624,50 @@
          Informations bateau
     ========================================================== -->
     <aside id="panel" aria-label="Informations AutoBoat">
+        <section class="panel-item">
+            <h4 class="panel-title">État système</h4>
+            <div class="health-grid">
+                <div class="health-row">
+                    <span class="health-dot unknown" id="healthLinkDot"></span>
+                    <span class="health-label">Liaison</span>
+                    <span class="health-value" id="healthLinkValue">—</span>
+                </div>
+                <div class="health-row">
+                    <span class="health-dot unknown" id="healthGpsDot"></span>
+                    <span class="health-label">GPS</span>
+                    <span class="health-value" id="healthGpsValue">—</span>
+                </div>
+                <div class="health-row">
+                    <span class="health-dot unknown" id="healthBatDot"></span>
+                    <span class="health-label">Batterie</span>
+                    <span class="health-value" id="healthBatValue">—</span>
+                </div>
+                <div class="health-row">
+                    <span class="health-dot unknown" id="healthRcDot"></span>
+                    <span class="health-label">Radio (RC)</span>
+                    <span class="health-value" id="healthRcValue">—</span>
+                </div>
+                <div class="health-row">
+                    <span class="health-dot unknown" id="healthModeDot"></span>
+                    <span class="health-label">Contrôle</span>
+                    <span class="health-value" id="healthModeValue">—</span>
+                </div>
+            </div>
+            <div class="health-warning" id="healthWarning" style="display:none;">
+                ⚠ Liaison perdue — paramètres ci-dessus non fiables (dernières valeurs connues).
+            </div>
+        </section>
+
+        <section class="panel-item" id="windObsSection" style="display:none;">
+            <h4 class="panel-title">📏 Mesure du vent en cours</h4>
+            <div class="progress-wrapper">
+                <div class="progress-container">
+                    <div class="progress-bar" id="windObsBar"></div>
+                </div>
+                <span id="windObsValue">0%</span>
+            </div>
+        </section>
+
         <section class="panel-item">
             <h4 class="panel-title">Dernier message</h4>
             <span id="boatLastTimeDisplay" class="panel-info">?</span>
@@ -503,8 +735,9 @@
         </section>
     </aside>
 
-    <script src="./map.js?v=3" defer=""></script>
-    <script src="./script.js?v=4" defer=""></script>
+    <script src="./nav.js?v=1" defer=""></script>
+    <script src="./map.js?v=4" defer=""></script>
+    <script src="./script.js?v=12" defer=""></script>
 
 
 </body></html>

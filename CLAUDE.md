@@ -14,17 +14,17 @@ The drone is a sail-powered surface vehicle. The key mechanics:
 - **Wing-profile sail** freely rotates around a vertical axis attached to the hull. Its aerodynamic profile passively orients it so the wind is always ~45° from the drone's centerline.
 - **Aileron servo (sail servo):** Controls a small flap at the trailing edge of the sail. Range is strictly ±10°. This binary-ish deflection determines whether the sail pushes the drone to port or starboard. It cannot be moved to arbitrary angles — only the two extreme positions have physical meaning.
 - **Rotor servo (Safran/rudder servo):** Controls the differential between the sail's free rotation and a fixed rotor at the stern. This is the primary yaw/heading actuator. **The Regatta ECO II is a positional multi-turn winch servo** — PWM sets a target shaft position (not a speed). 1500 µs = mechanical center, 1000 µs = one travel extreme, 2000 µs = other extreme. It holds position like a standard servo but has 6 full turns of travel instead of 180°. In manual mode CH4 stick position maps directly to rotor position; deadband snaps to exact center.
-- **Propellers (1 or 2, TBD):** Used only when wind is insufficient. Two ESCs allow differential thrust for steering when propeller mode is active.
+- **Propeller (single ESC, GPIO15):** Used when wind is insufficient. In the unified manual mode it runs alongside the servos, throttled by CH3 (see Section 13). ESC2/differential thrust removed in PCB V2.
 - **No wind sensor** — wind direction must be estimated from GPS track and actuator state.
 
 ### Control summary
 
 | What you want | How you do it |
 |---|---|
-| Change lateral drift direction | Toggle aileron servo ±10° |
-| Change heading / yaw | Move rotor servo |
-| Move in no-wind condition | Throttle + differential ESC |
-| Switch to manual RC | CH5 on radio receiver |
+| Change lateral drift direction | Toggle aileron servo ±10° (CH2) |
+| Change heading / yaw | Move rotor servo (CH4) |
+| Run the propeller | CH3 throttle (manual mode, single ESC, inverse) |
+| Switch mode | CH5: low=Auto, mid=Sail (inert), high=Manual |
 
 ---
 
@@ -74,17 +74,18 @@ The drone is a sail-powered surface vehicle. The key mechanics:
 ### RC Receiver
 - Pro-Tronik 2.4 GHz
 - Standard servo PWM (1000–2000 µs, 50 Hz)
-- CH5 controls mode: <1300 µs = ManualServo, >1700 µs = ManualProp, middle zone = Automatic
+- CH5 controls mode (3-pos switch): ≤1250 µs = **Automatic**, 1400–1600 µs = **Sail** (inert), >1800 µs = **Manual**
+- CH3 (propeller throttle) measured travel: 1100 µs = 100 %, 1990 µs = 0 % (**inverse**)
 
 ### Calibration values (from `Calibration.h` — Post-Claude)
 - Sail servo center: **1520 µs** (Futaba S3003 standard)
 - Sail servo ±10° positions: SAIL_PLUS_US=1575, SAIL_MINUS_US=1465 — **NEEDS BENCH CALIBRATION**
-- Rotor servo: **limited to ±180°** → ROTOR_MIN_US=1417, ROTOR_MAX_US=1583, center 1500 µs, deadband ±35 µs
+- Rotor servo: **limited to ±90°** → ROTOR_MIN_US=1417, ROTOR_MAX_US=1583, center 1500 µs, deadband ±35 µs, ROTOR_RANGE_DEG=90
   - Full hardware range is 1000–2000 µs (±3 turns = ±1080°), limited to ±83 µs from center for controllability
-  - Derivation: 500 µs/turn×(1/3)turn/360° → 2.16°/µs → 180°=83 µs
-- CH4 measured travel: CH4_MIN_US=1180, CH4_MAX_US=1790 (center ~1500 µs) — maps to ROTOR_MIN/MAX
-- ESC: 1000 µs (stop) to 2000 µs (full throttle)
-- ESC arming requires holding throttle at ≤**1300** µs for 2 seconds (PTR-6A minimum stick = ~1265 µs)
+- CH4 measured travel: CH4_MIN_US=1180, CH4_MAX_US=1790 (center ~1500 µs) — maps to ROTOR_MIN/MAX in manual mode
+- Auto-mode rudder uses only ±ROTOR_AUTO_RANGE_DEG=20° of winch travel (full ±90° too aggressive)
+- ESC: 1000 µs (stop) to 2000 µs (full throttle); single ESC on GPIO15
+- **Propeller (manual mode):** CH3 inverse — CH3_FULL_US=1100 → 100 %, CH3_ZERO_US=1990 → 0 %. Below PROP_MIN_FRACTION=0.10 (10 %) → forced 0 %. **No software arming gesture** (removed — see Section 13)
 - Slew rate limit: 30 µs/tick (prevents hard jerks on actuator changes)
 - Battery divider: R5=562kΩ (battery→ADC), R6=120kΩ (GND), ratio=5.683, GPIO36 ADC1_CH0
 
@@ -119,7 +120,7 @@ main.ino
         │     └── MissionManager  — state machine: Idle/Running/Holding/Completed/Failed
         ├── CONTROL
         │     ├── ModeManager     — CH5 → ControlMode enum
-        │     ├── ManualController— RC pass-through for servo and prop modes
+        │     ├── ManualController— unified manual: sail + winch + propeller (CH3)
         │     ├── AutoController  — dispatches to SailAutoMode or PropulsionAutoMode
         │     ├── SailAutoMode    — autonomous sail navigation (THE CORE ALGORITHM)
         │     └── PropulsionAutoMode — autonomous propeller navigation
@@ -210,13 +211,23 @@ Output: esc1Us, esc2Us (differential for steering)
 JSON format matching the original `boat.ino` protocol for server compatibility.
 Parsed with `strstr()` on char buffers — no ArduinoJson dependency.
 
-**Heartbeat TX (drone → ground), every 1 s:**
+**Heartbeat TX (drone → ground), every 1 s** (current format — `control_mode` removed, GPS/RC + wind-obs fields added, size-trimmed):
 ```json
 {"origin":"boat","type":"info","message":{"mode":"standby|route-ready|navigate",
-"location":[lat,lon],"servos":{"sail":0,"rudder":0},"control_mode":"radio|autonomous",
-"heading":0.0,"wind":0,"bat":0.00,"waypoints":{"total":0,"current":0}}}
+"location":[lat,lon],"servos":{"sail":±10,"rudder":deg},
+"heading":H,"wind":0,"bat":0.00,
+"fix":0|1,"sat":N,"hdop":X.X,"rc":0|1,
+"wt":total,"wc":current,"wobs":NN,"rssi":-NNN}}
 ```
-Mode mapping: Failsafe/Manual → `"standby"`, Auto+Idle/Complete → `"route-ready"`, Auto+Running/Returning → `"navigate"`.
+- `servos.sail` = ±10° (binary), `servos.rudder` = winch degrees (manual ±90° / auto ±20°).
+- `fix/sat/hdop` = GPS health; `rc` = 1 if the RC receiver is delivering pulses (any channel ≠ 0).
+- **`wt`/`wc`** = waypoints total/current (flattened from the old `waypoints:{total,current}` object — saves ~22 B). IHM reads `wt`/`wc` (fallback to old shape).
+- **`wobs`** = wind-observation progress 0–100 % — **conditional**: present ONLY while a wind measurement is running (`AutoController::windObsProgressPct()` = travelled / `WIND_OBS_DISTANCE_M`). Absent the rest of the time.
+- **`control_mode` deleted** — 100 % correlated with `mode` (standby ⟺ radio, route-ready/navigate ⟺ autonomous). The IHM derives it. Frees ~28 B.
+- **Size cuts to stay well under 255 B**: `control_mode` removed, `heading` integer (`%.0f`), `location` 5 decimals (`%.5f` ≈ 1.1 m, map-only), `waypoints` flattened to `wt`/`wc`.
+- **`rssi`** is **NOT sent by the boat** — the transceiver injects `,"rssi":<packetRssi>` before the closing `}}` on each forwarded line (measured on the ground side, over USB → doesn't count against the 255 B LoRa budget).
+- Mode mapping: Failsafe/Manual/Sail → `"standby"`, Auto+Idle/Complete → `"route-ready"`, Auto+Running/Returning → `"navigate"`.
+- Measured size ≈ 210 B with rssi (≈ 224 B with `wobs`); worst case ≈ 232 B — comfortable margin.
 
 **Commands RX (ground → drone):**
 ```json
@@ -242,27 +253,51 @@ Mode mapping: Failsafe/Manual → `"standby"`, Auto+Idle/Complete → `"route-re
 | Module | File | Status | Notes |
 |---|---|---|---|
 | `webserver.py` | `IHM/app/webserver.py` | ✅ | FastAPI, port 5000, sirve HTML estático |
-| `serial_link.py` | `IHM/app/serial_link.py` | ✅ | Lee/escribe JSON por serial, MongoDB como bus. Reenvía comandos en ráfaga 3× (anti-colisión LoRa half-duplex) |
-| `routes/messages.py` | `IHM/app/routes/messages.py` | ✅ | API REST. `BASE_DIR` ahora dinámico (`Path(__file__).parents[2]`) — ya NO hardcodeado a /home/ewen |
-| `static/map.js` + `script.js` | `IHM/app/static/` | ✅ | Leaflet: marcar waypoints con clic, enviar ruta, polling /api/messages 1 Hz |
-| `start_ihm.sh` / `stop_ihm.sh` | `IHM/` | ✅ | Arranca/para Mongo Docker + serial_link + webserver + browser. `start_ihm.sh /dev/ttyUSBx` fuerza puerto |
+| `serial_link.py` | `IHM/app/serial_link.py` | ✅ | Lee/escribe JSON por serial, MongoDB como bus. Ráfaga 3× (anti-colisión LoRa). **Re-resuelve el puerto por nº de serie en cada (re)conexión** y reconecta solo ante desconexión/re-enumeración USB. Abre con dsrdtr/rtscts=False (no resetea el ESP32 al reconectar) |
+| `config.py` | `IHM/app/config.py` | ✅ | **Auto-detección del transceiver por nº de serie CP2104** vía `/dev/serial/by-id/` (sin udev/root). Prioridad: override CLI → detección → fallback .env. `find_transceiver_port()` / `resolve_serial_port()` |
+| `routes/messages.py` | `IHM/app/routes/messages.py` | ✅ | API REST. `BASE_DIR` dinámico. `reset-transceiver` y relanzado usan detección por serie |
+| `static/nav.js` | `IHM/app/static/nav.js` | ✅ | **Réplica JS exacta de `navigation.h`** + simulador cinemático para la predicción de trayectoria |
+| `static/map.js` + `script.js` | `IHM/app/static/` | ✅ | Leaflet: waypoints con clic, enviar ruta, polling 1 Hz, brújula de viento, toggle trayectoria, barra de progreso medición de viento |
+| `start_ihm.sh` / `stop_ihm.sh` | `IHM/` | ✅ | **Reescritos robustos**: stop mata TODO (TERM→KILL, libera puerto 5000 = worker uvicorn, `docker compose down`); start limpia desde cero (llama a stop), trunca logs, Python `-u` (logs en vivo), verifica cada componente. `start_ihm.sh /dev/ttyUSBx` fuerza puerto |
+| `99-autoboat.rules` | `IHM/` | ✅ | Regla udev opcional → `/dev/ttyAUTOBOAT_TRX` y `_BOAT` fijos. **Transceiver = serie 01C00B54, barco = 02126CF1** |
+| `docker-compose.yml` | `IHM/` | ✅ | MongoDB local (mongo:7, 27017). `.env`: SIMULATION=false, TRANSCEIVER_SERIAL=01C00B54, DB_NAME=autoboat |
 
-**Notas IHM:** (1) El puerto del transceiver alterna entre ttyUSB0/ttyUSB1 al reconectar — verificar con `ls /dev/ttyUSB*` y pasar como argumento. (2) Faltan en la UI: botón **Stop** (endpoint /api/stop existe), botón **Home**. (3) Batería se muestra en voltios (firmware manda `bat`, no `%`). (4) En modo real NO usar el botón "Start" (lanza simulación).
+**Panel de diagnóstico (`static/`):** semáforos de salud Liaison / GPS / Batterie / Radio (RC) / Contrôle.
+- **Liaison**: por antigüedad del último timestamp NUEVO (verde <3 s, amarillo 3–10 s, rojo >10 s); muestra **RSSI dBm** (amarillo si ≤ −110).
+- **GPS**: usa `fix`/`sat`/`hdop` (verde si fix & sat≥5 & hdop≤2.5).
+- **Batterie**: umbrales LiPo 2S (verde ≥7.0 V, amarillo ≥6.6, rojo <6.6).
+- **Radio (RC)**: `rc`=1 → OK.
+- **Contrôle**: derivado de `mode` — verde "auto", **celeste** "radio".
+- Si la Liaison se pierde, los otros pasan a amarillo + advertencia en francés ("paramètres non fiables").
 
-### Post-Claude Phase 1 — Manual RC Control ✅ COMPLETE (106/106 tests pass)
+**Toggle Sim/Réel** (persistido en localStorage): en modo Réel oculta Start/Réinit-coms y llama `POST /api/set-mode` (relanza serial_link en el puerto real); en Sim muestra esos botones (la pila se lanza con Start). Botón **🔌 Reconnecter TRX** (solo modo real) → `POST /api/reset-transceiver` (pulso DTR/RTS = hard-reset del ESP32 + relanza serial_link).
+
+**Endpoints añadidos en `messages.py`:** `/api/stop`, `/api/set-mode`, `/api/reconnect`, `/api/reset-transceiver` (+ `launch_process` acepta `env=`).
+
+**Brújula de viento** (esquina sup. izq. del mapa): flecha que apunta a la **fuente** del viento (`wind` = de dónde viene; mapa norte-arriba). Gris si no hay dato. El control de zoom de Leaflet se movió a la derecha para liberar la esquina.
+
+**Predicción de trayectoria** (`nav.js`, toggle "🧭 Trajectoire"): réplica exacta de `navigation.h` en JS (mismas constantes/llamada que `AutoController`) + simulador cinemático (el rumbo sigue al timón, velocidad constante — el firmware no define la dinámica, así que el TRAZADO es aproximado aunque la lógica de barra/vela sea exacta; constantes `SIM_*` ajustables en `nav.js`). Dibuja polilínea punteada del barco al waypoint `wc`.
+
+**Barra de progreso de medición de viento**: sección "📏 Mesure du vent" visible solo mientras llega `wobs`; se llena hasta 100 % a los 30 m y desaparece al terminar.
+
+**Notas IHM:** (1) El puerto del transceiver ya no importa — se **auto-detecta por nº de serie** (`config.py`). (2) Nunca abrir gtkterm/pyserial sobre el puerto del transceiver mientras corre la IHM — dos lectores compiten y corrompen el JSON. (3) Falta en la UI el botón **Stop** aunque el endpoint existe.
+
+### Post-Claude Phase 1 — Manual RC Control ✅ COMPLETE (⚠️ unit tests now STALE — see note)
 
 | Module | File | Status | Notes |
 |---|---|---|---|
 | `AxpPower` | `drivers/AxpPower.h/.cpp` | ✅ | AXP192 init: LDO2/LDO3/DCDC1 enabled. Wire.end() REMOVED — I2C stays persistent |
 | `RcReceiver` | `drivers/RcReceiver.h/.cpp` | ✅ | 4-ch (CH2/3/4/5) interrupt PWM, ISR-safe portMUX, 100 ms timeout. CH6 removed. |
 | `McpwmActuators` | `drivers/McpwmActuators.h/.cpp` | ✅ | MCPWM Timers 0+1, slew limiting, single ESC on GPIO15. ESC2 removed. |
-| `ModeManager` | `control/ModeManager.h/.cpp` | ✅ | CH5 → Failsafe/ManualServo/ManualProp/Automatic |
-| `ManualController` | `control/ManualController.h/.cpp` | ✅ | Binary sail, winch positional, single ESC arming. Prop: CH3→throttle + CH4→rotor |
-| `DroneApp` | `app/DroneApp.h/.cpp` | ✅ | 20 ms control tick, 200 ms debug serial, arming indicator |
-| `Types` | `core/Types.h` | ✅ | ControlMode enum, RcFrame, ActuatorCommand structs |
-| `BoardConfig` | `config/BoardConfig.h` | ✅ | All pin assignments and RC thresholds |
+| `ModeManager` | `control/ModeManager.h/.cpp` | ✅ | CH5 → Failsafe / **Sail** (inert) / **Manual** / Automatic |
+| `ManualController` | `control/ManualController.h/.cpp` | ✅ | **Unified manual mode**: binary sail (CH2) + winch (CH4) + propeller (CH3 inverse, 10 % deadzone). Arming removed. |
+| `DroneApp` | `app/DroneApp.h/.cpp` | ✅ | 20 ms control tick; dispatch Manual→manual, Sail→neutral, Auto/Failsafe→mission |
+| `Types` | `core/Types.h` | ✅ | ControlMode enum (Failsafe/Sail/Manual/Automatic), RcFrame, ActuatorCommand |
+| `BoardConfig` | `config/BoardConfig.h` | ✅ | Pin assignments, RC thresholds, CH3/CH4 travel |
 | `Calibration` | `config/Calibration.h` | ✅ | Servo/ESC µs values (sail positions need bench calibration) |
 | `main.ino` | `main/main.ino` | ✅ | Instantiates DroneApp, calls begin()/update() |
+
+⚠️ **Test suite stale (does NOT build):** `test/test_runner.cpp` predates the `main/src/` reorg (can't find `core/Types.h`) and the single-ESC migration (references `esc2Us`, old 1300/1700 CH5 thresholds, `isEscArmed()`, the removed arming). The "106/106" milestone is historical. Firmware itself compiles & flashes fine; the native test build is broken and needs a rewrite to match current behavior (Sail/Manual modes, CH3 inverse throttle, rotor remap). Separate task — not done yet.
 
 ### Post-Claude Phase 2 — GPS + Navigation ✅ COMPLETE (hardware tested outdoors)
 
@@ -281,9 +316,9 @@ GPS hardware notes: board requires LiPo battery for warm starts (without battery
 | Module | File | Status | Notes |
 |---|---|---|---|
 | `LoRaRadio` | `drivers/LoRaRadio.h/.cpp` | ✅ | SPI HSPI, 433 MHz, RST=GPIO23 (enabled — CH6 removed), blocking TX |
-| `LoRaComm` | `comm/LoRaComm.h/.cpp` | ✅ | JSON heartbeat TX 1 Hz, command dispatch (navigate/stop/home/waypoints/wind/restart) |
+| `LoRaComm` | `comm/LoRaComm.h/.cpp` | ✅ | JSON heartbeat TX 1 Hz (now with sail/rudder deg + fix/sat/hdop/rc, no control_mode), command dispatch (navigate/stop/home/waypoints/wind/restart) |
 | `DroneApp` | `app/DroneApp.h/.cpp` | ✅ | loraHbTick() at 1 s, lora_.update() every loop, [LORA] debug line |
-| Transceiver | `transceiver/transceiver.ino` | ✅ | Ground station sketch — shorthand commands + raw JSON passthrough, tested on T-Beam |
+| Transceiver | `transceiver/transceiver.ino` | ✅ | Ground station — shorthand commands + raw JSON passthrough + **injects RSSI** into each forwarded heartbeat. Hardware tested. |
 
 ### Post-Claude Phase 5 — Wind Estimation from GPS ✅ CODED (untested on water)
 
@@ -388,8 +423,8 @@ Sensors / `SensorBus` (Phase 4), Storage/Logging + Autonomous Propulsion + Winch
 | `main/drivers/BatteryAdc.h/.cpp` | GPIO36 ADC1_CH0, R5=562kΩ/R6=120kΩ divider, 11dB attenuation |
 | `main/drivers/RcReceiver.h/.cpp` | Interrupt-driven RC PWM reading, 4 channels (CH2/3/4/5), ISR-safe with portMUX |
 | `main/drivers/McpwmActuators.h/.cpp` | MCPWM output for sail servo (GPIO2), rotor (GPIO25), ESC1 (GPIO15). Single ESC. |
-| `main/control/ModeManager.h/.cpp` | Decodes CH5 → ControlMode (Failsafe / ManualServo / ManualProp) |
-| `main/control/ManualController.h/.cpp` | RC → ActuatorCommand: binary sail, winch pass-through, ESC differential + arming |
+| `main/control/ModeManager.h/.cpp` | Decodes CH5 → ControlMode (Failsafe / Sail / Manual / Automatic) |
+| `main/control/ManualController.h/.cpp` | RC → ActuatorCommand: unified manual (binary sail + winch + CH3 inverse propeller). No arming. |
 | `main/app/DroneApp.h/.cpp` | Orchestrator: 20/200/1000 ms ticks (control/debug/LoRa heartbeat) |
 | `main/drivers/GpsUart.h/.cpp` | Serial1 TinyGPSPlus wrapper — position, sats-in-view, last NMEA line |
 | `main/drivers/LoRaRadio.h/.cpp` | SX1276 driver — SPI HSPI 433 MHz, blocking TX, polling RX |
@@ -400,7 +435,7 @@ Sensors / `SensorBus` (Phase 4), Storage/Logging + Autonomous Propulsion + Winch
 | `transceiver/transceiver.ino` | Ground station sketch — shorthand CLI + raw JSON ↔ LoRa bridge |
 | `test/CMakeLists.txt` | Native Linux build for logic unit tests (no hardware needed) |
 | `test/stubs/Arduino.h` | Minimal Arduino type stub (uint8_t etc.) for host compilation |
-| `test/test_runner.cpp` | 106 test cases: ModeManager, ManualController servo/prop/arming/failsafe |
+| `test/test_runner.cpp` | ⚠️ STALE — does not build (predates `main/src/` reorg + single-ESC + Sail/Manual rename). Needs rewrite. |
 | `docs/rapport_projet.tex` | French technical report (pdflatex, 29 pages) — project history, phases, problems/solutions |
 | `docs/rapport_projet.pdf` | Compiled PDF — regenerate with `pdflatex -interaction=nonstopmode rapport_projet.tex` (run twice) |
 
@@ -559,19 +594,32 @@ The Arduino IDE only compiles `.cpp` files that are in the same folder as the `.
 | 2026-06-04 | Autonomous-sailing prep for general test (4 fixes). (1) **Rotor range corrected to ±90°** (was mislabeled ±180° in Calibration.h/heartbeat): ROTOR_MIN/MAX=1417/1583 = physical ±90°, added ROTOR_RANGE_DEG=90. (2) **AutoController rudder mapping fixed** — was 25 µs/° (assumed full 1000–2000 µs range) causing saturation past ~3.3°; now maps nav rudder ±NAV_RUDDER_LIMIT_DEG (±20°) onto the full ±83 µs travel (≈4.15 µs/°). (3) **Persistent nav state** — AutoController now keeps rudderAngle_/sailAngle_ as members instead of reconstructing from clamped µs each tick (the lofer/abattre integrator depends on it); compute() signature dropped the currentSailUs/currentRotorUs params, DroneApp call site updated. (4) **Wind handling** — windValid_ flag (set by wind-command OR estimation); navigation holds neutral until wind known. wind-observation command now wired to AutoController::beginWindObservation()/observeWind(): sails fixed +10° tack, circular-EMA smooths GPS course, after WIND_OBS_DISTANCE_M=30 m latches wind = smoothHeading+90° via nav_handleWindObservation(). Heartbeat rotorDeg now -90..+90. Compiles 368 KB (28%) / 25 KB (7%). navigation.h logic untouched. |
 | 2026-06-04 | Auto rudder range reduced to ±20°. First fix mapped nav rudder ±20° onto the full ±90° winch (±83 µs) — too aggressive on the bench. Reverted to a gentle envelope: nav rudder degrees now map **1:1 to physical winch degrees**, clamped to `ROTOR_AUTO_RANGE_DEG`=20° (new Calibration.h constant). usPerDeg = (ROTOR_MAX−CENTER)/ROTOR_RANGE_DEG = 83/90 ≈ 0.92 µs/° → auto winch travel only 1482–1518 µs. Manual mode keeps full ±90°. Flashed to boat (chip ESP32-D0WDQ6-V3, ttyUSB1). |
 | 2026-06-04 | IHM session: launched full stack on real hardware — confirmed end-to-end LoRa link (boat heartbeats → transceiver → serial_link → Mongo → web map, bat 7.7 V, GPS fix in Brest). Added burst retransmit (3×, 0.35 s) in serial_link.py to beat LoRa half-duplex collisions (commands are idempotent). Diagnosed wind-observation: command reaches boat but observation is invisible in telemetry until it completes after 30 m travel. Transceiver USB port alternates ttyUSB0/ttyUSB1 on reconnect — pass explicit port to start_ihm.sh. |
+| 2026-06-04 | Heartbeat servos now report real degrees: sail = ±10° (binary, from sailUs vs SAIL_CENTER), rudder = winch degrees (linear from rotorUs). sendHeartbeat() gained sailUs/rotorUs params; DroneApp passes lastCommand_. Was hardcoded `{"sail":0,"rudder":0}`. |
+| 2026-06-10 | **IHM diagnostics — 4 stages.** (1) Front-only health panel (Liaison/GPS/Batterie/RC/Contrôle semaphores) + Sim/Réel toggle (hides sim-only buttons) + staleness detection by timestamp delta; lost link greys the other rows yellow with a French "non fiable" warning. (2) Backend endpoints `/api/set-mode`, `/api/reconnect`, `/api/reset-transceiver` (ESP32 hard-reset via DTR/RTS), `/api/stop`; `launch_process(env=)`; `/start` now launches serial_link in sim mode explicitly. `.env`→local Mongo, `docker-compose.yml` added. (3) Firmware heartbeat: added `fix/sat/hdop/rc`, **removed `control_mode`** (redundant with mode, frees 28 B). (4) Transceiver injects ground-measured `rssi` into each forwarded heartbeat. Liaison row shows dBm. Verified end-to-end: rssi −102 dBm, packet 235 B. Boat + transceiver reflashed. |
+| 2026-06-10 | **Unified manual mode.** CH5 redistributed: low=Automatic (unchanged), middle=**Sail** (inert — neutral outputs), high=**Manual**. Manual = servos exactly as before (CH2 sail, CH4 winch) **plus** propeller on CH3, **inverse** (1100 µs=100 %, 1990 µs=0 %), forced 0 % below 10 % power; CH3=0 (lost) → ESC stop. Enum renamed ManualServo→Sail, ManualProp→Manual across Types/ModeManager/DroneApp/LoRaComm/ManualController. **ESC arming gesture removed** (incompatible with inverse throttle). ManualController rewritten (single computeManual, no arming/disarm/toSigned1000). Compiles 368 KB; flashed to boat (ttyUSB1, needed BOOT-mode retry). |
+| 2026-06-10 | Linker fix (pre-existing WIP): `AutoController::computeAutoPropulsionUs` was declared as a static member but defined as a file-local `static` free function → undefined reference. Qualified the definition with `AutoController::`. |
+| 2026-06-10 | Wind-observation progress bar. Firmware: `AutoController::windObsProgressPct()` (travelled/30 m), heartbeat gained a **conditional** `wobs` field (present only while measuring). To stay under 255 B with it, trimmed the heartbeat: `heading` → integer, `location` → 5 decimals, `waypoints:{total,current}` → flat `wt`/`wc`. IHM: progress section "Mesure du vent" + parser updated to `wt`/`wc`. Boat reflashed; verified ~210 B typical / ~232 B worst. |
+| 2026-06-10 | IHM diagnostics v2 (frontend-only). (1) **Wind compass** top-left of map — arrow points to wind source (`wind` = from), greys when no data; Leaflet zoom moved to top-right. (2) **Trajectory prediction** — `nav.js` is a faithful JS port of `navigation.h` (upwind/downwind zigzag, corridor cross-track, empannage, lofer/abattre) + a simple kinematic simulator (heading follows rudder, constant speed — path is approximate, steering logic exact). Toggle button "🧭 Trajectoire" draws a dashed polyline boat→current-waypoint. No reflash. |
+| 2026-06-10 | USB auto-detection by serial. Both boards are Silicon Labs **CP2104** with unique factory serials. `config.py` resolves the transceiver port from `/dev/serial/by-id/` by `TRANSCEIVER_SERIAL` (no udev/root needed); `serial_link.py` re-resolves on every (re)connect and reconnects on disconnect/USB re-enumeration (opens with dsrdtr/rtscts=False to avoid resetting the ESP32). Added `99-autoboat.rules` (optional fixed `/dev/ttyAUTOBOAT_TRX`/`_BOAT`). **Serials: transceiver=01C00B54, boat=02126CF1** (initially had them swapped — corrected after reading both boards). |
+| 2026-06-10 | start/stop scripts rewritten for reliability. `stop_ihm.sh`: SIGTERM→SIGKILL escalation, frees port 5000 (kills the uvicorn reload worker that kept the webserver alive), `docker compose down --remove-orphans` + `docker rm -f` (mongo no longer survives via restart:unless-stopped), verifies each component. `start_ihm.sh`: runs stop first (clean slate), truncates logs, launches Python with `-u` (live logs). Tested end-to-end: stop → 0 procs/port free/mongo down; start → all up, transceiver auto-detected on ttyUSB1, data flowing. |
+| 2026-06-10 | Hardware finding: the **boat's USB connection flaps** (kernel `cp210x ... status -19`, disconnect→reattach with a new ttyUSBn) — caused by the boat running on USB only with a dead battery (0.81 V) → brownouts drop the bus. Not a software issue; the serial_link reconnect-by-serial logic tolerates it, but stable telemetry needs the boat properly powered (LiPo). |
 
 ---
 
 ## 13. Notes on Key Algorithms
 
-### ManualController — ManualServo mode
+### ManualController — unified Manual mode (CH5 high)
+One mode (`computeManual`) drives servos **and** propeller together. Entered only when CH5 > 1800.
 - **CH2 → sail (binary):** center deadband ±35 µs. First frame initializes sail state from stick position to avoid snap on mode entry. Inside deadband: hold last state.
-- **CH4 → rotor (positional):** CH4 measured range 1180–1790 µs maps to ROTOR_MIN_US–ROTOR_MAX_US (1417–1583 µs = ±180°). Deadband ±35 µs around center snaps to ROTOR_CENTER_US (1500). The Regatta ECO II holds its position. Full hardware range (1000–2000 µs = ±1080°) deliberately not used — limited to ±180° for controllability.
+- **CH4 → rotor (positional):** CH4 measured range 1180–1790 µs maps to ROTOR_MIN_US–ROTOR_MAX_US (1417–1583 µs = ±90°). Deadband ±35 µs around center snaps to ROTOR_CENTER_US (1500). The Regatta ECO II holds its position.
+- **CH3 → propeller (inverse):** `frac = (1990 − CH3) / (1990 − 1100)`, clamped [0,1]. `frac < 0.10 → 0`. `esc1Us = 1000 + frac × 1000`. Safety: **CH3 == 0 (lost) → ESC stop**.
+- **Channel-loss guard:** if CH2 or CH4 read 0, `update()` resets sail state and returns safe neutral (ActuatorCommand defaults).
 
-### ManualController — ManualProp mode
-- **Arming:** CH3 must stay ≤ **1300** µs for 2 continuous seconds (PTR-6A stick minimum is ~1265 µs — old 1050 µs threshold was never reachable). Serial prints `[hold throttle low to ARM]` while waiting.
-- **Single ESC + rotor steering:** CH3 → ESC1 throttle (linear map). CH4 → rotor position (same deadband logic as servo mode). No differential thrust in PCB V2.
-- `toSigned1000(us)` = `(int32_t(us) − 1500) × 2` → range −1000..+1000
+### Sail mode (CH5 middle) — inert
+Does nothing: DroneApp outputs `ActuatorCommand{}` defaults (sail 1520, rotor 1500, esc 1000) and resets the manual controller. Out-of-band CH5 values also fall back to Sail.
+
+### ESC arming — REMOVED (2026-06-10)
+The old "hold CH3 ≤1300 µs for 2 s" gesture was dropped: it is incompatible with the new inverse throttle (idle is now CH3 high ≈1990, not low) and was not requested. The 10 % low-deadzone + the actuator slew limiter are the safety. The ESC still arms via its own firmware (sees idle at power-on if the boat boots with CH3 at 0 %). To re-add a startup interlock, gate the throttle until CH3 has been seen at 0 % once after entering Manual.
 
 ### Future WinchTracker (Phase 6 prerequisite)
 The Regatta ECO II has no position feedback. For autonomous mode a software estimator is needed:
@@ -587,12 +635,12 @@ Before water testing, verify each subsystem in order:
 
 1. **AXP192 boot** — Power on, check serial for `[AXP]  OK`. If `WARN`, check I2C at GPIO21/22 for short.
 2. **RC signal** — Power on RC transmitter first, then drone. Serial should show CH2–CH5 updating within ~2 s of RC receiver binding. All channels should read 1400–1600 µs at stick centers.
-3. **Mode switching** — Move CH5 3-pos switch: verify `[FAILSAFE]` → `[SAIL    ]` → `[PROP    ]` transitions in serial output.
-4. **Sail servo (ManualServo mode)** — Push CH2 stick past ±35 µs deadband. Verify sail servo snaps between two positions. Measure actual angle — adjust `SAIL_PLUS_US` and `SAIL_MINUS_US` in `Calibration.h` until physical ±10° is confirmed.
-5. **Rotor winch (ManualServo mode)** — Move CH4. Verify winch rotates in both directions. Verify it stops cleanly at 1500 µs. Count turns to verify drum travel matches mechanical linkage.
-6. **ESC arming (ManualProp mode)** — Switch to PROP mode. Hold CH3 at minimum. Verify `[hold throttle low to ARM]` message, then disappears after ~2 s. Raise CH3 briefly — verify ESC beeps/runs.
-7. **Differential thrust (ManualProp mode, propellers disconnected)** — Raise CH3 to ~50% throttle. Move CH4 left/right. Verify `esc1`/`esc2` values diverge symmetrically in serial output.
-8. **Failsafe** — Turn off transmitter while in SAIL mode. Within 100 ms, all channels should read 0 and mode should switch to `[FAILSAFE]`. Actuators should go to safe defaults (sail=1520, rotor=1500, esc=1000).
+3. **Mode switching** — Move CH5 3-pos switch: verify `[FAILSAFE]` → `[SAIL    ]` (inert) → `[MANUAL  ]` transitions in serial output.
+4. **Sail servo (Manual mode)** — Push CH2 stick past ±35 µs deadband. Verify sail servo snaps between two positions. Measure actual angle — adjust `SAIL_PLUS_US`/`SAIL_MINUS_US` in `Calibration.h` until physical ±10° is confirmed.
+5. **Rotor winch (Manual mode)** — Move CH4. Verify winch rotates in both directions and stops cleanly at 1500 µs.
+6. **Propeller (Manual mode, propeller disconnected)** — With CH3 high (≈1990) verify `esc1`=1000 (0 %). Lower CH3 toward 1100: `esc1` rises (inverse). Confirm that above ~90 % stick (≈10 % power) it snaps from 0 to active, i.e. below 10 % → `esc1`=1000.
+7. **Sail-position inert check** — CH5 to middle (SAIL): verify all actuators hold neutral (sail=1520, rotor=1500, esc1=1000) regardless of sticks.
+8. **Failsafe** — Turn off transmitter while in MANUAL mode. Within 100 ms all channels read 0 and mode switches to `[FAILSAFE]`; actuators go to safe defaults.
 
 ---
 
@@ -657,8 +705,9 @@ Before water testing, verify each subsystem in order:
   ```
   ~/bin/arduino-cli compile --fqbn esp32:esp32:t-beam /home/facundo/Proyectos/PER_Dron_a_voile/Informatica/Post-Claude/main
   ```
-- Last successful compile (drone main): **359 KB flash (27%), 25 KB RAM (7%)**
-- Last successful compile (transceiver): **302 KB flash (23%), 21 KB RAM (6%)**
+- Last successful compile (drone main): **368 KB flash (28%), 25 KB RAM (7%)**
+- Last successful compile (transceiver): **328 KB flash (25%), 23 KB RAM (7%)**
+- Upload: `~/bin/arduino-cli upload --fqbn esp32:esp32:t-beam --port /dev/ttyUSBx <sketch>` — if "Wrong boot mode (0xb)", retry once (auto-reset is flaky) or hold BOOT while resetting.
 
 ---
 

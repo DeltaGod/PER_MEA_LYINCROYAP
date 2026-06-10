@@ -81,10 +81,22 @@ void setup() {
 // ==========================================
 void loop() {
   // --- RX: LoRa packet → Serial ---
-  // Print raw JSON only — serial_link.py parses lines starting with '{'
+  // On injecte le RSSI (mesuré ici, au sol) dans l'objet "message" du JSON,
+  // juste avant les deux accolades finales "}}". serial_link.py parse ensuite
+  // la ligne normalement. Le RSSI ne transite pas par LoRa : il ne compte donc
+  // pas dans la limite des 255 octets du paquet.
   int pktSize = LoRa.parsePacket();
   if (pktSize > 0) {
-    Serial.println(LoRa.readString());
+    String msg = LoRa.readString();
+    int rssi = LoRa.packetRssi();
+    msg.trim();
+
+    int end = msg.lastIndexOf("}}");
+    if (msg.startsWith("{") && end > 0) {
+      Serial.println(msg.substring(0, end) + ",\"rssi\":" + String(rssi) + "}}");
+    } else {
+      Serial.println(msg);   // non-JSON : transmis tel quel
+    }
   }
 
   // --- TX: Serial line → LoRa ---

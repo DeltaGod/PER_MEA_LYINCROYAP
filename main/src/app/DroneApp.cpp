@@ -6,8 +6,8 @@
 static const char* modeName(ControlMode m) {
     switch (m) {
         case ControlMode::Failsafe:    return "FAILSAFE";
-        case ControlMode::ManualServo: return "SAIL    ";
-        case ControlMode::ManualProp:  return "PROP    ";
+        case ControlMode::Sail:        return "SAIL    ";
+        case ControlMode::Manual:      return "MANUAL  ";
         case ControlMode::Automatic:   return "AUTO    ";
     }
     return "?       ";
@@ -98,9 +98,13 @@ void DroneApp::controlTick(uint32_t nowMs) {
         prevMode_ = activeMode_;
     }
 
-    if (activeMode_ == ControlMode::ManualServo ||
-        activeMode_ == ControlMode::ManualProp) {
-        lastCommand_ = manual_.update(lastFrame_, activeMode_, nowMs);
+    if (activeMode_ == ControlMode::Manual) {
+        lastCommand_ = manual_.update(lastFrame_);
+        lastTargetActive_ = false;
+    } else if (activeMode_ == ControlMode::Sail) {
+        // Position voile : inerte — tous les actionneurs au neutre.
+        manual_.reset();
+        lastCommand_ = ActuatorCommand{};
         lastTargetActive_ = false;
     } else if (windObsActive_) {
         // Wind-observation maneuver: sail a fixed tack and infer wind from GPS track
@@ -129,16 +133,12 @@ void DroneApp::controlTick(uint32_t nowMs) {
 }
 
 void DroneApp::debugTick() {
-    // Arming indicator appended when in prop mode and ESC not yet armed
-    const bool showArming = (activeMode_ == ControlMode::ManualProp && !manual_.isEscArmed());
-
-    Serial.printf("[%s] CH2=%4u CH3=%4u CH4=%4u CH5=%4u | sail=%4u rotor=%4u esc1=%4u | bat=%.2fV%s\n",
+    Serial.printf("[%s] CH2=%4u CH3=%4u CH4=%4u CH5=%4u | sail=%4u rotor=%4u esc1=%4u | bat=%.2fV\n",
         modeName(activeMode_),
         lastFrame_.ch2, lastFrame_.ch3, lastFrame_.ch4, lastFrame_.ch5,
         lastCommand_.sailUs, lastCommand_.rotorUs,
         actuators_.esc1Us(),
-        lastBatVolts_,
-        showArming ? "  [hold throttle low to ARM]" : "");
+        lastBatVolts_);
 
     const GpsPosition& gp = gps_.position();
     if (gp.valid) {
@@ -195,6 +195,12 @@ void DroneApp::debugTick() {
 
 void DroneApp::loraHbTick() {
     const GpsPosition& gp = gps_.position();
+
+    // RC présent si au moins un canal renvoie une largeur valide
+    // (RcReceiver renvoie 0 sur un canal après 100 ms sans impulsion).
+    const bool rcOk = (lastFrame_.ch2 != 0 || lastFrame_.ch3 != 0 ||
+                       lastFrame_.ch4 != 0 || lastFrame_.ch5 != 0);
+
     lora_.sendHeartbeat(
         activeMode_,
         mission_.state(),
@@ -204,6 +210,8 @@ void DroneApp::loraHbTick() {
         mission_.waypointCount(),
         windDeg_,
         lastCommand_.sailUs,
-        lastCommand_.rotorUs
+        lastCommand_.rotorUs,
+        gp.valid, gp.satellites, gp.hdop, rcOk,
+        windObsActive_, autoCtrl_.windObsProgressPct()
     );
 }

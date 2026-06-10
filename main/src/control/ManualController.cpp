@@ -4,22 +4,11 @@
 #include "../config/DebugConfig.h"
 
 void ManualController::reset() {
-    bool wasArmed  = escArmed_;
-    bool wasInited = sailStateInitialized_;
+    if (sailStateInitialized_) {
+        DBG_CTRL("reset: sail→+1 (un-init)");
+    }
     sailState_            = +1;
     sailStateInitialized_ = false;
-    disarm();
-    if (wasInited || wasArmed) {
-        DBG_CTRL("reset: sail→+1 (un-init)%s", wasArmed ? "  ESC disarmed" : "");
-    }
-}
-
-void ManualController::disarm() {
-    if (escArmed_) {
-        DBG_CTRL("ESC disarmed");
-    }
-    escArmed_   = false;
-    armStartMs_ = 0;
 }
 
 uint16_t ManualController::clamp(uint16_t v, uint16_t lo, uint16_t hi) {
@@ -35,24 +24,19 @@ uint16_t ManualController::mapUs(uint16_t in, uint16_t inLo, uint16_t inHi,
            static_cast<uint32_t>(in - inLo) * (outHi - outLo) / (inHi - inLo));
 }
 
-int16_t ManualController::toSigned1000(uint16_t us) {
-    us = clamp(us, BoardConfig::RC_MIN_US, BoardConfig::RC_MAX_US);
-    return static_cast<int16_t>((static_cast<int32_t>(us) - BoardConfig::RC_MID_US) * 2);
-}
-
-ActuatorCommand ManualController::computeServoMode(const RcFrame& frame) {
+// Mode manuel unifié : voile (CH2) + safran (CH4) + propulseur (CH3 inverse).
+ActuatorCommand ManualController::computeManual(const RcFrame& frame) {
     ActuatorCommand cmd;
-    cmd.esc1Us = Calibration::ESC_STOP_US;
+    const uint16_t db = BoardConfig::RC_DEADBAND_US;
 
-    // --- Sail: binary ±10° toggle driven by CH2 ---
+    // --- Voile : bascule binaire ±10° pilotée par CH2 ---
     if (!sailStateInitialized_) {
         const int8_t init = (frame.ch2 >= BoardConfig::RC_MID_US) ? +1 : -1;
         DBG_CTRL("sail state init: %+d (CH2=%u)", (int)init, (unsigned)frame.ch2);
         sailState_            = init;
         sailStateInitialized_ = true;
     }
-    const uint16_t db = BoardConfig::RC_DEADBAND_US;
-    const int8_t   prevSail = sailState_;
+    const int8_t prevSail = sailState_;
     if      (frame.ch2 > static_cast<uint16_t>(BoardConfig::RC_MID_US + db)) sailState_ = +1;
     else if (frame.ch2 < static_cast<uint16_t>(BoardConfig::RC_MID_US - db)) sailState_ = -1;
 
@@ -60,13 +44,10 @@ ActuatorCommand ManualController::computeServoMode(const RcFrame& frame) {
         DBG_CTRL("sail toggle: %+d → %+d  (CH2=%u)",
             (int)prevSail, (int)sailState_, (unsigned)frame.ch2);
     }
-
     cmd.sailUs = (sailState_ > 0) ? Calibration::SAIL_PLUS_US : Calibration::SAIL_MINUS_US;
 
-    // --- Safran / REGATTA ECO II: CH4 controls target position ---
-    // Positional multi-turn winch: PWM maps to a shaft position, not a speed.
-    // Deadband snaps to exact mechanical center; outside deadband the stick
-    // position maps linearly to the calibrated travel range.
+    // --- Safran / REGATTA ECO II : CH4 → position cible (winch multi-tours) ---
+    // Zone morte au centre → centre mécanique exact ; sinon mappage linéaire.
     const uint16_t ch4 = frame.ch4;
     if (ch4 >= static_cast<uint16_t>(BoardConfig::RC_MID_US - db) &&
         ch4 <= static_cast<uint16_t>(BoardConfig::RC_MID_US + db)) {
@@ -77,75 +58,32 @@ ActuatorCommand ManualController::computeServoMode(const RcFrame& frame) {
                             Calibration::ROTOR_MIN_US, Calibration::ROTOR_MAX_US);
     }
 
-    return cmd;
-}
-
-ActuatorCommand ManualController::computePropMode(const RcFrame& frame, uint32_t nowMs) {
-    ActuatorCommand cmd;
-    cmd.sailUs  = Calibration::SAIL_CENTER_US;
-    cmd.rotorUs = Calibration::ROTOR_STOP_US;
-
-    if (!escArmed_) {
-        if (frame.ch3 <= Calibration::ESC_ARM_MAX_US) {
-            if (armStartMs_ == 0) {
-                armStartMs_ = nowMs;
-                DBG_CTRL("ESC arm countdown started (hold CH3 ≤%u for %ums)",
-                    (unsigned)Calibration::ESC_ARM_MAX_US, (unsigned)Calibration::ESC_ARM_MS);
-            }
-            if (static_cast<uint32_t>(nowMs - armStartMs_) >= Calibration::ESC_ARM_MS) {
-                escArmed_ = true;
-                DBG_CTRL("ESC ARMED");
-            }
-        } else {
-            if (armStartMs_ != 0) {
-                DBG_CTRL("ESC arm countdown reset (CH3=%u > %u)",
-                    (unsigned)frame.ch3, (unsigned)Calibration::ESC_ARM_MAX_US);
-            }
-            armStartMs_ = 0;
-        }
+    // --- Propulseur : CH3 INVERSE (1100 µs = 100 %, 1990 µs = 0 %) ---
+    // Sécurité : CH3 perdu (0) → arrêt moteur.
+    if (frame.ch3 == 0) {
         cmd.esc1Us = Calibration::ESC_STOP_US;
-        return cmd;
-    }
-
-    // Throttle from CH3 — single ESC
-    cmd.esc1Us = mapUs(frame.ch3,
-                       BoardConfig::RC_MIN_US, BoardConfig::RC_MAX_US,
-                       Calibration::ESC_STOP_US, Calibration::ESC_MAX_US);
-
-    // Rudder/safran steering from CH4 — same deadband + positional map as servo mode
-    const uint16_t db  = BoardConfig::RC_DEADBAND_US;
-    const uint16_t ch4 = frame.ch4;
-    if (ch4 >= static_cast<uint16_t>(BoardConfig::RC_MID_US - db) &&
-        ch4 <= static_cast<uint16_t>(BoardConfig::RC_MID_US + db)) {
-        cmd.rotorUs = Calibration::ROTOR_CENTER_US;
     } else {
-        cmd.rotorUs = mapUs(ch4,
-                            BoardConfig::CH4_MIN_US, BoardConfig::CH4_MAX_US,
-                            Calibration::ROTOR_MIN_US, Calibration::ROTOR_MAX_US);
+        const uint16_t ch3 = clamp(frame.ch3,
+                                   BoardConfig::CH3_FULL_US, BoardConfig::CH3_ZERO_US);
+        float frac = static_cast<float>(BoardConfig::CH3_ZERO_US - ch3) /
+                     static_cast<float>(BoardConfig::CH3_ZERO_US - BoardConfig::CH3_FULL_US);
+        // Zone morte basse : sous 10 % de puissance → 0 %.
+        if (frac < Calibration::PROP_MIN_FRACTION) {
+            frac = 0.0f;
+        }
+        cmd.esc1Us = static_cast<uint16_t>(
+            Calibration::ESC_STOP_US +
+            frac * (Calibration::ESC_MAX_US - Calibration::ESC_STOP_US));
     }
+
     return cmd;
 }
 
-ActuatorCommand ManualController::update(const RcFrame& frame, ControlMode mode, uint32_t nowMs) {
-    switch (mode) {
-        case ControlMode::ManualServo:
-            if (frame.ch2 != 0 && frame.ch4 != 0) {
-                disarm();
-                return computeServoMode(frame);
-            }
-            break;
-
-        case ControlMode::ManualProp:
-            if (frame.ch3 != 0 && frame.ch4 != 0) {
-                return computePropMode(frame, nowMs);
-            }
-            break;
-
-        default:
-            break;
+ActuatorCommand ManualController::update(const RcFrame& frame) {
+    // Voies servo perdues → neutre sécurisé (et ré-init de la voile à la reprise).
+    if (frame.ch2 == 0 || frame.ch4 == 0) {
+        reset();
+        return ActuatorCommand{};
     }
-
-    // Channels lost or unhandled mode — disarm and return safe defaults
-    reset();
-    return ActuatorCommand{};
+    return computeManual(frame);
 }

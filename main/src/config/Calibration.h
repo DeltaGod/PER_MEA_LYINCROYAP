@@ -37,9 +37,9 @@ static constexpr uint16_t ESC_MAX_US     = 2000;  // full throttle
 static constexpr uint16_t ESC_ARM_MAX_US = 1300;  // throttle must be ≤ this to trigger arming
 static constexpr uint32_t ESC_ARM_MS     = 2000;  // hold time required to arm
 
-// Differential steering limit in ManualProp mode
-// Each ESC deviates at most this many µs from the base throttle
-static constexpr uint16_t ESC_DIFF_MAX_US = 200;
+// Propulseur en mode manuel : en dessous de cette fraction de puissance,
+// la commande est ramenée à 0 % (zone morte basse, évite les démarrages parasites).
+static constexpr float PROP_MIN_FRACTION = 0.10f;
 
 // ESC slew rate (µs per control tick) — protects drivetrain from brutal throttle jumps
 static constexpr uint16_t ESC_SLEW_US = 30;

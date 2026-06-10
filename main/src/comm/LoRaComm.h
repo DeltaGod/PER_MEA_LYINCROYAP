@@ -13,7 +13,9 @@ public:
     void sendHeartbeat(ControlMode mode, MissionState mState,
                        double lat, double lon, float heading,
                        float batVolts, uint8_t wptCur, uint8_t wptTotal,
-                       float windDeg, uint16_t sailUs, uint16_t rotorUs);
+                       float windDeg, uint16_t sailUs, uint16_t rotorUs,
+                       bool gpsFix, uint8_t sats, float hdop, bool rcOk,
+                       bool windObs, uint8_t windObsPct);
 
     uint32_t txCount()    const { return txCount_; }
     int      lastRxRssi() const { return lastRxRssi_; }

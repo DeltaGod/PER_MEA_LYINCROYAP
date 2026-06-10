@@ -11,7 +11,11 @@ const state = {
     map: null,
     waypoints: [],
     waypointMarkers: [],
-    routeLine: null
+    routeLine: null,
+    // Prédiction de trajectoire
+    showTrajectory: false,
+    trajectoryLine: null,
+    lastTelemetry: null      // {lat, lon, heading, wind, wpIndex}
 };
 
 
@@ -47,6 +51,9 @@ function initMap() {
 
     state.map = L.map("map").setView([48.360687, -4.565710], 17);
     window.autoboatMap = state.map;
+
+    // Libère le coin sup. gauche pour la boussole de vent.
+    state.map.zoomControl.setPosition("topright");
 
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 19,
@@ -85,7 +92,81 @@ function bindUiEvents() {
         console.warn("Bouton #clear-route-btn introuvable.");
     }
 
+    const trajectoryBtn = document.getElementById("trajectoryButton");
+    if (trajectoryBtn) {
+        trajectoryBtn.addEventListener("click", () => {
+            setTrajectoryEnabled(!state.showTrajectory);
+            trajectoryBtn.classList.toggle("btn-primary", state.showTrajectory);
+        });
+    }
+
     console.log("Événements UI connectés");
+}
+
+
+// ============================================================
+// Prédiction de trajectoire (réplique navigation.h via nav.js)
+// ============================================================
+
+function setTrajectoryEnabled(on) {
+    state.showTrajectory = on;
+    if (on) {
+        renderTrajectory();
+    } else {
+        clearTrajectory();
+    }
+}
+
+function clearTrajectory() {
+    if (state.trajectoryLine && state.map) {
+        state.map.removeLayer(state.trajectoryLine);
+    }
+    state.trajectoryLine = null;
+}
+
+// Appelée à chaque télémétrie depuis script.js.
+function feedTelemetry(lat, lon, heading, wind, wpIndex) {
+    state.lastTelemetry = { lat, lon, heading, wind, wpIndex };
+    if (state.showTrajectory) {
+        renderTrajectory();
+    }
+}
+
+function renderTrajectory() {
+    if (!state.map || !state.showTrajectory) {
+        return;
+    }
+    clearTrajectory();
+
+    const t = state.lastTelemetry;
+    if (!t || t.lat === undefined || (t.lat === 0 && t.lon === 0)) {
+        return;   // pas de position bateau
+    }
+    // Waypoint cible = waypoint courant (index "wc" de la télémétrie).
+    const idx = (typeof t.wpIndex === "number") ? t.wpIndex : 0;
+    if (!state.waypoints || idx < 0 || idx >= state.waypoints.length) {
+        return;   // pas de route chargée / index hors limites
+    }
+    if (typeof AutoBoatNav === "undefined") {
+        console.warn("nav.js non chargé.");
+        return;
+    }
+
+    const wp = state.waypoints[idx];
+    const path = AutoBoatNav.predictTrajectory(
+        t.lat, t.lon, t.heading, t.wind, wp.lat, wp.lon, wp.radius_m
+    );
+    if (!path || path.length < 2) {
+        return;
+    }
+
+    state.trajectoryLine = L.polyline(path, {
+        color: "#8e44ad",
+        weight: 3,
+        opacity: 0.85,
+        dashArray: "6, 6",
+        clickable: false
+    }).addTo(state.map);
 }
 
 

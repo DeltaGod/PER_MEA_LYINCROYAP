@@ -5,12 +5,15 @@ import subprocess
 import time
 import urllib.parse
 from pathlib import Path
-from typing import Any, List
+from typing import Any, List, Optional
+
+import serial
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+import config
 from utils import db
 
 
@@ -49,6 +52,15 @@ class Waypoint(BaseModel):
 
 class RouteRequest(BaseModel):
     waypoints: List[Waypoint]
+
+
+class ModeRequest(BaseModel):
+    mode: str                       # "sim" ou "real"
+    port: Optional[str] = None      # port série forcé (sinon valeur du .env)
+
+
+class ResetTransceiverRequest(BaseModel):
+    port: Optional[str] = None      # port du transceiver (sinon SERIAL_PORT_REAL)
 
 
 # ============================================================
@@ -203,9 +215,13 @@ def is_running(name: str) -> bool:
     return name in processes and processes[name].poll() is None
 
 
-def launch_process(name: str, command, shell: bool = False) -> dict:
+def launch_process(name: str, command, shell: bool = False, env: dict = None) -> dict:
     """
     Lance un processus si celui-ci n'est pas déjà actif.
+
+    env : variables d'environnement supplémentaires fusionnées avec os.environ.
+          Permet par exemple de forcer SIMULATION / SERIAL_PORT_REAL pour
+          serial_link.py sans modifier le fichier .env.
     """
 
     if is_running(name):
@@ -215,6 +231,8 @@ def launch_process(name: str, command, shell: bool = False) -> dict:
             "pid": processes[name].pid
         }
 
+    proc_env = {**os.environ, **env} if env else None
+
     try:
         process = subprocess.Popen(
             command,
@@ -222,7 +240,8 @@ def launch_process(name: str, command, shell: bool = False) -> dict:
             shell=shell,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            start_new_session=True
+            start_new_session=True,
+            env=proc_env
         )
 
         processes[name] = process
@@ -394,6 +413,77 @@ def remove_virtual_serial_links() -> list[dict]:
             })
 
     return results
+
+
+# ============================================================
+# Gestion de la liaison série (serial_link.py)
+# ============================================================
+
+def stop_serial_link() -> list[dict]:
+    """
+    Arrête serial_link.py, qu'il ait été lancé par /start (suivi dans
+    `processes`) ou directement par start_ihm.sh (détecté par motif).
+    Libère ainsi le port série avant de le relancer ou de le réinitialiser.
+    """
+
+    results = []
+
+    tracked = processes.pop("serial_link", None)
+    if tracked is not None:
+        results.append(terminate_process_group("serial_link", tracked))
+
+    stopped_groups: set[int] = set()
+    for pid in find_pids_by_pattern(COMMUNICATION_PROCESS_PATTERNS["serial_link"]):
+        results.append(terminate_external_pid("serial_link", pid, stopped_groups))
+
+    return results
+
+
+def start_serial_link(mode: Optional[str] = None, port: Optional[str] = None) -> dict:
+    """
+    Démarre serial_link.py.
+
+    mode = "sim"  → SIMULATION=true,  port éventuel dans SERIAL_PORT_SIM
+    mode = "real" → SIMULATION=false, port éventuel dans SERIAL_PORT_REAL
+    mode = None   → aucun forçage, serial_link lit le .env tel quel
+    """
+
+    env = {}
+
+    if mode == "sim":
+        env["SIMULATION"] = "true"
+        if port:
+            env["SERIAL_PORT_SIM"] = port
+    elif mode == "real":
+        env["SIMULATION"] = "false"
+        if port:
+            # Port explicite → override (prioritaire sur l'auto-détection par série).
+            env["SERIAL_PORT_OVERRIDE"] = port
+
+    return launch_process(
+        "serial_link",
+        [PYTHON_BIN, "app/serial_link.py"],
+        env=env or None
+    )
+
+
+def reset_esp32(port: str, baud: int = 115200) -> None:
+    """
+    Réinitialise la carte transceiver (ESP32) via les lignes DTR/RTS,
+    comme le fait esptool pour un "hard reset" : RTS pilote EN (reset).
+    On maintient EN bas 100 ms puis on relâche → la carte redémarre
+    sur son programme (pas en mode bootloader, IO0 reste haut).
+    """
+
+    ser = serial.Serial(port, baud)
+    try:
+        ser.setDTR(False)   # IO0 = HAUT (démarrage normal, pas bootloader)
+        ser.setRTS(True)    # EN  = BAS  (reset actif)
+        time.sleep(0.1)
+        ser.setRTS(False)   # EN  = HAUT (reset relâché)
+        time.sleep(0.1)
+    finally:
+        ser.close()
 
 
 # ============================================================
@@ -611,16 +701,11 @@ def send_start():
         )
     )
 
-    # 4. Lancer serial_link.py avec le Python du venv
-    results.append(
-        launch_process(
-            "serial_link",
-            [
-                PYTHON_BIN,
-                "app/serial_link.py"
-            ]
-        )
-    )
+    # 4. Relancer serial_link.py en mode simulation (port /tmp/ttyV1),
+    #    indépendamment de la valeur SIMULATION du .env.
+    stop_serial_link()
+    time.sleep(0.5)
+    results.append(start_serial_link("sim"))
 
     return JSONResponse({
         "status": "ok",
@@ -679,6 +764,82 @@ def reset_communications():
         "external_processes": external_results,
         "serial_links": serial_link_results,
         "deleted_messages": delete_result.deleted_count
+    })
+
+
+@router.post("/set-mode")
+def set_mode(req: ModeRequest):
+    """
+    Bascule entre mode simulation et mode réel.
+    Relance serial_link.py sur le bon port série.
+    """
+
+    if req.mode not in ("sim", "real"):
+        return JSONResponse(
+            {"status": "error", "message": "mode invalide (attendu : sim | real)"},
+            status_code=400
+        )
+
+    stop_results = stop_serial_link()
+    time.sleep(0.8)   # laisser le port série se libérer
+    launch = start_serial_link(req.mode, req.port)
+
+    return JSONResponse({
+        "status": "ok",
+        "mode": req.mode,
+        "stopped": stop_results,
+        "started": launch
+    })
+
+
+@router.post("/reconnect")
+def reconnect():
+    """
+    Reconnecte la PC au transceiver : relance serial_link.py
+    sur le port courant (lu depuis le .env).
+    """
+
+    stop_results = stop_serial_link()
+    time.sleep(0.8)
+    launch = start_serial_link()
+
+    return JSONResponse({
+        "status": "ok",
+        "message": "serial_link relancé.",
+        "stopped": stop_results,
+        "started": launch
+    })
+
+
+@router.post("/reset-transceiver")
+def reset_transceiver(req: ResetTransceiverRequest):
+    """
+    Réinitialise la carte transceiver (impulsion DTR/RTS) puis relance
+    serial_link.py. Le port doit être libre pendant l'impulsion, donc on
+    arrête serial_link d'abord.
+    """
+
+    # Port du transceiver : explicite, sinon auto-détecté par numéro de série,
+    # sinon le port résolu au démarrage.
+    port = req.port or config.find_transceiver_port() or config.SERIAL_PORT
+
+    stop_results = stop_serial_link()
+    time.sleep(0.8)
+
+    try:
+        reset_esp32(port)
+        reset_status = {"port": port, "status": "reset_sent"}
+    except Exception as e:
+        reset_status = {"port": port, "status": "error", "error": str(e)}
+
+    time.sleep(0.5)
+    launch = start_serial_link()
+
+    return JSONResponse({
+        "status": "ok",
+        "transceiver": reset_status,
+        "stopped": stop_results,
+        "started": launch
     })
 
 

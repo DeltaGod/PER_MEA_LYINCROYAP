@@ -3,7 +3,7 @@ import json
 import time
 
 from utils import db
-from config import SERIAL_PORT, BAUD_RATE
+import config
 
 def extract_json_payload(line):
     start = line.find("{")
@@ -21,12 +21,19 @@ def extract_json_payload(line):
 
 
 def connect():
+    # Ré-résout le port à CHAUD à chaque tentative : si l'USB se ré-énumère
+    # (ttyUSB0→ttyUSB2...), on retrouve le transceiver par son numéro de série
+    # au lieu de rester collé à un nœud /dev mort.
+    port, source = config.resolve_serial_port()
     try:
-        ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
-        print(f"Listening on {SERIAL_PORT} at {BAUD_RATE} baud...")
+        # dsrdtr/rtscts=False : évite de réinitialiser l'ESP32 (toggle DTR/RTS)
+        # à chaque (re)connexion — important quand l'USB se ré-énumère souvent.
+        ser = serial.Serial(port, config.BAUD_RATE, timeout=1,
+                            dsrdtr=False, rtscts=False)
+        print(f"Listening on {port} [{source}] at {config.BAUD_RATE} baud...")
         return ser
     except serial.SerialException as e:
-        print(f"Serial error: {e}")
+        print(f"Serial error ({port}): {e}")
         return None
 
 
@@ -74,24 +81,34 @@ def send(ser, collection):
 
 def main():
     collection = db.sync_client()
-    ser = connect()
-    if ser:   
-        while True:
-            try:
-                read(ser, collection)
-                send(ser, collection)
+    ser = None
+    while True:
+        try:
+            if ser is None:
+                ser = connect()
+                if ser is None:
+                    time.sleep(1.0)   # port absent → on réessaie (re-détection)
+                    continue
+            read(ser, collection)
+            send(ser, collection)
 
-            except KeyboardInterrupt:
-                # Handle Ctrl+C to exit
-                print("Exiting...")
+        except KeyboardInterrupt:
+            print("Exiting...")
+            if ser:
                 ser.close()
-                break
+            break
 
-            except Exception as e:
-                # Restart in case of failure (e.g. invalid char received)
-                print(f"Error: {e}")
-                print("Restarting...")
+        except Exception as e:
+            # Déconnexion / ré-énumération USB / caractère invalide :
+            # on ferme et on reconnecte (avec re-détection du port).
+            print(f"Error: {e} — reconnexion...")
+            try:
+                if ser:
+                    ser.close()
+            except Exception:
                 pass
+            ser = None
+            time.sleep(1.0)
 
 
 if __name__ == "__main__":
