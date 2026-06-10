@@ -1,345 +1,316 @@
-# AutoBoat - Architecture de la simulation
+# Architecture du simulateur
 
-Ce document explique comment la simulation fonctionne, ou modifier les scenarios, et comment relier la simulation a la navigation reelle.
+Ce document explique comment le simulateur est construit. Il s'adresse à une
+personne qui découvre le projet et ne suppose aucune connaissance préalable de
+la navigation à voile.
 
-## Vue d'ensemble
+Pour utiliser le programme, voir [UTILISATION.md](UTILISATION.md).
+Pour comprendre les décisions de navigation, voir [NAVIGATION.md](NAVIGATION.md).
 
-```text
-simulation/sim_main.cpp
-  -> cree les scenarios
-  -> lance l'observation du vent
-  -> lance la navigation
-  -> exporte les resultats
+## 1. À quoi sert le simulateur ?
 
-simulation/sim_boat.cpp / .hpp
-  -> represente le bateau simule
-  -> appelle la logique de navigation de boat/navigation.h
-  -> applique les angles de voile et de safran a l'environnement
+Le simulateur permet de tester la logique de navigation sans bateau réel. Il
+fait tourner une boucle qui répète deux opérations :
 
-boat/navigation.h
-  -> contient la decision de navigation
-  -> fichier partage avec le firmware reel
+1. la navigation choisit une position de voile et une position de gouvernail ;
+2. un modèle physique simplifié calcule le nouveau déplacement du bateau.
 
-simulation/sim_environment.cpp / .hpp
-  -> simule la physique
-  -> calcule vitesse, cap et nouvelle position GPS
+Les positions successives sont mémorisées puis exportées dans une page HTML
+interactive.
 
-simulation/export/
-  -> ecrit les fichiers CSV
-  -> genere la page HTML interactive
+Le simulateur n'est pas un modèle marin réaliste. Son objectif principal est de
+vérifier les décisions générales : rejoindre un point, tirer des bords face au
+vent, éviter un empannage direct et passer au point suivant.
 
-simulation/mocks/
-  -> remplace Arduino, LoRa et SPI pour compiler sur ordinateur
-```
-
-## Principe important
-
-La simulation n'a pas sa propre logique de navigation. Elle inclut :
-
-```cpp
-#include "navigation.h"
-```
-
-dans `simulation/sim_boat.cpp`.
-
-Comme le `Makefile` ajoute `../boat` aux dossiers d'inclusion, ce fichier est `boat/navigation.h`.
-
-Cela permet de tester sur ordinateur le meme algorithme que celui utilise par `boat/boat.ino`.
-
-## Execution d'un pas de simulation
-
-Un pas de simulation correspond a :
+## 2. Organisation des fichiers
 
 ```text
-SimulatedBoat::stepSimulation(dt_ms)
-  -> updateNavigationLogic()
-  -> environment.update(dt_ms)
+simulation/
+├── Makefile
+├── sim_main.cpp                 scénarios et point d'entrée
+├── sim_boat.hpp/.cpp            adaptation de la navigation au simulateur
+├── sim_environment.hpp/.cpp     état et physique simplifiée du bateau
+├── exporter.hpp/.cpp            création de la page HTML
+├── mock/
+│   ├── Arduino.h/.cpp           remplacement minimal d'Arduino
+│   └── LoRa.h/.cpp              remplacement minimal de LoRa
+└── docs/
+    ├── CODE_ARCHITECTURE.md
+    ├── UTILISATION.md
+    └── NAVIGATION.md
+
+main/src/navigation/
+├── navigation.h                 navigation actuelle
+├── oldNavigation.h              ancienne navigation
+├── NavigationSelector.h         sélection utilisée par le firmware
+└── NavigationConfig.h           choix entre les deux versions
 ```
 
-Les deux parties ont des roles differents.
+## 3. Vue d'ensemble
 
-### 1. `updateNavigationLogic()`
-
-Cette methode lit l'etat actuel :
-
-- position GPS ;
-- cap ;
-- waypoint courant ;
-- vent connu ;
-- angles actuels.
-
-Puis elle appelle la navigation partagee :
-
-- `nav_handleWindObservation()` si le mode est `wind-observation` ;
-- `nav_handleNavigation()` si le mode est `navigate`.
-
-La navigation renvoie un `NavResult`.
-
-```cpp
-struct NavResult {
-    float sailAngle;
-    float rudderAngle;
-    int sendInterval;
-    const char* mode;
-    const char* logMessage;
-    bool windAcquired;
-    double acquiredWindDir;
-    bool waypointReached;
-};
+```text
+sim_main.cpp
+    │ crée un scénario
+    ▼
+SimulatedBoat
+    │ fournit position, cap, vent et waypoint
+    ▼
+navigation.h
+    │ renvoie voile, gouvernail, mode et arrivée éventuelle
+    ▼
+SimulationEnvironment
+    │ calcule vitesse, rotation et nouvelle position
+    ▼
+historique des SimBoatState
+    │
+    ▼
+exporter.cpp → output/simulation.html
 ```
 
-La simulation applique ensuite les angles a l'environnement :
+Les responsabilités sont volontairement séparées :
 
-```cpp
-environment.setServoAngles(clampedSail, clampedRudder);
-```
-
-### 2. `environment.update(dt_ms)`
-
-Cette methode avance le monde physique.
-
-Elle ne decide pas ou aller. Elle repond seulement a la question :
-
-> Si la voile et le safran ont ces angles pendant `dt_ms`, ou sera le bateau apres ?
-
-Le resultat est ajoute dans l'historique `history`, qui sert ensuite aux exports CSV et HTML.
-
-## La physique simplifiee
-
-Toute la physique est dans :
-
-```cpp
-SimulationEnvironment::updateBoatDynamics(...)
-```
-
-Elle suit cinq etapes.
-
-### 1. Vent relatif
-
-Le simulateur calcule d'abord l'angle du vent par rapport au bateau :
-
-```cpp
-relativeWind = windDirection - heading
-```
-
-Puis il normalise entre `-180` et `+180`.
-
-### 2. Efficacite de la voile
-
-La voile est modelisee comme une aile rigide libre en rotation.
-
-L'aileron donne l'angle d'attaque :
-
-```cpp
-angleOfAttack = abs(aileronAngle)
-```
-
-Si le signe de l'aileron est coherent avec le vent relatif, la voile produit de la portance. Sinon, elle produit tres peu de propulsion.
-
-### 3. Polaire du bateau
-
-La polaire donne une vitesse theorique selon l'angle au vent.
-
-| Angle au vent | Coefficient |
+| Élément | Responsabilité |
 |---|---|
-| 0 a 30 deg | presque nul |
-| 30 a 60 deg | augmente progressivement |
-| 60 a 110 deg | maximum |
-| 110 a 150 deg | bon mais decroissant |
-| 150 a 180 deg | plus faible |
+| `sim_main.cpp` | Décrire les scénarios et leur durée |
+| `SimulatedBoat` | Relier la navigation réelle à la simulation |
+| `SimulationEnvironment` | Faire évoluer le bateau dans le temps |
+| `navigation.h` | Décider comment diriger le bateau |
+| `exporter.cpp` | Produire la visualisation HTML |
+| `mock/` | Remplacer les fonctions Arduino absentes sur un ordinateur |
 
-La vitesse cible vaut :
+## 4. Déroulement d'un scénario
 
-```cpp
-targetSpeed = maxSpeed * polarCoeff * sailEff * (windSpeed / 5.0)
-```
-
-Avec `maxSpeed = 2.5 m/s`.
-
-### 4. Inertie
-
-Le bateau ne passe pas instantanement a la vitesse cible.
-
-```cpp
-speed += (targetSpeed - speed) * 0.05
-```
-
-Cette formule donne une acceleration progressive.
-
-### 5. Rotation et deplacement GPS
-
-Le safran ne fonctionne bien que si le bateau avance :
-
-```cpp
-steeringEff = min(1.0, speed / 0.5)
-turnRate = -rudderOffset * 0.5 * steeringEff
-heading += turnRate * dt_s
-```
-
-Ensuite, la distance parcourue est :
-
-```cpp
-moveDistanceM = speed * dt_s
-```
-
-Le simulateur convertit cette distance en variation de latitude et longitude.
-
-## Les scenarios
-
-Les scenarios sont dans `simulation/sim_main.cpp`.
-
-Chaque scenario suit le meme modele :
+Un scénario suit généralement cette séquence :
 
 ```cpp
 SimTime::init();
 
 SimulatedBoat boat;
-boat.init(startLat, startLng, windDir, windSpeed, initialHeading);
-boat.addWaypoint(wptLat, wptLng);
+boat.init(latitude, longitude, ventDirection, ventVitesse, capInitial);
+
+boat.addWaypoint(latitudeCible, longitudeCible);
+
 boat.startWindObservation();
-boat.runSimulation(60000, 100);
-boat.setWindDirection(windDir);
+boat.runSimulation(dureeObservationMs, pasDeTempsMs);
+
 boat.startNavigation();
-boat.runSimulation(duration, 100);
+boat.runSimulation(dureeNavigationMs, pasDeTempsMs);
 ```
 
-Signification des arguments de `boat.init(...)` :
+### Initialisation
 
-| Argument | Signification |
-|---|---|
-| `startLat` | Latitude de depart. |
-| `startLng` | Longitude de depart. |
-| `windDir` | Direction d'ou vient le vent. |
-| `windSpeed` | Vitesse du vent en m/s. |
-| `initialHeading` | Cap initial du bateau. |
+`boat.init(...)` initialise :
 
-Scenarios disponibles :
+- la position GPS ;
+- le cap du bateau ;
+- la direction et la vitesse du vent ;
+- les angles initiaux de voile et de gouvernail ;
+- l'état interne de la navigation.
 
-| Numero | Nom | Objectif |
+### Ajout des waypoints
+
+Un waypoint est une cible GPS :
+
+```cpp
+boat.addWaypoint(48.342791, -4.531538);
+```
+
+Le rayon d'arrivée n'est pas un argument de `addWaypoint(...)`. Il est fixé à
+`10 m` par `WAYPOINT_DISTANCE_SIM` dans `sim_boat.hpp`. Le waypoint est
+considéré atteint quand le bateau entre dans ce cercle, ou quand il dépasse la
+ligne d'arrivée dans le corridor autorisé.
+
+Les waypoints sont parcourus dans leur ordre d'ajout.
+
+### Observation du vent
+
+`startWindObservation()` place le bateau dans une phase particulière. Le
+simulateur attend que le bateau se soit éloigné de `30 m` de son point de
+départ, puis estime la direction du vent à partir de son cap. Cette phase
+reproduit grossièrement le comportement prévu sur le bateau réel.
+
+### Navigation
+
+`startNavigation()` active les décisions de navigation. À chaque pas de temps,
+la navigation reçoit notamment :
+
+- la position actuelle ;
+- le cap actuel ;
+- la direction du vent ;
+- le waypoint courant ;
+- les angles de voile et de gouvernail ;
+- son état interne précédent.
+
+Elle renvoie un `NavResult` contenant les nouvelles commandes et le mode choisi.
+
+## 5. Une itération de simulation
+
+La méthode centrale est `SimulatedBoat::stepSimulation(...)`.
+
+```text
+1. Lire l'état actuel
+2. Appeler la logique de navigation
+3. Appliquer les commandes de voile et de gouvernail
+4. Calculer le mouvement pendant le pas de temps
+5. Enregistrer le nouvel état dans l'historique
+6. Passer au waypoint suivant si nécessaire
+```
+
+Cette distinction est importante :
+
+- la navigation décide ce que le bateau devrait faire ;
+- l'environnement décide ce que ces commandes produisent physiquement.
+
+Une erreur de trajectoire peut donc venir de l'une ou de l'autre partie.
+
+## 6. État simulé
+
+`SimBoatState` regroupe les valeurs nécessaires à un instant donné :
+
+| Champ | Signification | Unité |
 |---|---|---|
-| 1 | Wind Obs | Tester seulement l'observation du vent. |
-| 2 | VDB | Waypoint face au vent. |
-| 3 | Lofer | Waypoint atteignable en remontant vers le vent. |
-| 4 | Abattre | Waypoint atteignable en descendant du vent. |
-| 5 | Complex | Parcours avec deux waypoints. |
-| 6 | Simple | Cas simple de reaching. |
+| `latitude`, `longitude` | Position GPS | degrés |
+| `heading` | Cap du bateau | degrés |
+| `speed` | Vitesse | m/s |
+| `sailAngle` | Position de la voile | degrés |
+| `rudderAngle` | Position du gouvernail | degrés |
+| `windDirection` | Direction d'où vient le vent | degrés |
+| `windSpeed` | Vitesse du vent | m/s |
+| `time` | Temps simulé | ms |
+| `navMode` | Décision de navigation affichée | entier |
 
-## Comment modifier un scenario
+Les angles de cap suivent la convention d'une boussole :
 
-### Changer le vent
+```text
+0° ou 360° : nord
+90°         : est
+180°        : sud
+270°        : ouest
+```
 
-Dans `sim_main.cpp`, modifier :
+La direction du vent indique d'où vient le vent. Un vent de `270°` vient donc
+de l'ouest et souffle vers l'est.
+
+## 7. Modèle physique
+
+Le modèle physique se trouve dans
+`SimulationEnvironment::updateBoatDynamics(...)`. Il est volontairement simple.
+
+### Vitesse produite par la voile
+
+Le programme calcule l'angle entre le bateau et le vent. Une polaire simplifiée
+attribue ensuite un coefficient de vitesse :
+
+- presque face au vent : très peu de propulsion ;
+- vent de travers : propulsion importante ;
+- vent arrière : propulsion possible mais réduite près de l'axe interdit.
+
+La vitesse cible est limitée à environ `2,5 m/s`. La vitesse réelle rejoint
+progressivement cette cible afin d'éviter un changement instantané.
+
+### Rotation produite par le gouvernail
+
+Le gouvernail crée une vitesse de rotation. Son effet dépend aussi de la vitesse
+du bateau : un gouvernail est moins efficace quand le bateau avance peu.
+
+Le cap est ensuite normalisé entre `0°` et `360°`.
+
+### Déplacement GPS
+
+La distance parcourue pendant un pas vaut approximativement :
+
+```text
+distance = vitesse × durée du pas
+```
+
+Cette distance est projetée vers le nord et l'est selon le cap, puis convertie
+en variation de latitude et de longitude.
+
+## 8. Temps simulé
+
+Le simulateur utilise `SimTime` à la place de l'horloge réelle d'Arduino. Il
+peut donc simuler plusieurs jours sans attendre plusieurs jours devant
+l'ordinateur.
+
+Le pas de temps contrôle la fréquence des calculs :
 
 ```cpp
-boat.init(48.340, -4.520, 180, 4.0, 90);
+boat.runSimulation(60 * 60 * 1000UL, 100);
 ```
 
-Ici :
+Cet exemple simule une heure avec un calcul toutes les `100 ms`.
 
-- `180` est la direction du vent ;
-- `4.0` est la vitesse du vent ;
-- `90` est le cap initial.
+Un petit pas donne une trajectoire plus détaillée mais demande davantage de
+calculs et de mémoire. Un grand pas accélère les longues simulations mais
+réduit la précision.
 
-Si le scenario force ensuite le vent avec `setWindDirection(...)`, modifier aussi cette ligne.
+## 9. Historique et export HTML
 
-### Changer un waypoint
+Après chaque déplacement, l'état est ajouté à un historique. L'exporteur
+rassemble ensuite les historiques de tous les scénarios dans :
 
-Modifier ou ajouter :
-
-```cpp
-boat.addWaypoint(48.3368, -4.520);
+```text
+simulation/output/simulation.html
 ```
 
-Pour plusieurs waypoints, appeler `addWaypoint(...)` plusieurs fois dans l'ordre voulu.
+La page contient :
 
-### Changer la duree
+- une carte et la trajectoire ;
+- les waypoints ;
+- une animation de la progression ;
+- le cap, la vitesse, la voile et le gouvernail ;
+- le mode de navigation courant ;
+- un onglet par scénario.
 
-Modifier :
+Les très longs historiques sont sous-échantillonnés pour que la page reste
+utilisable. L'HTML charge Leaflet et les fonds de carte depuis Internet.
 
-```cpp
-boat.runSimulation(6400000, 100);
+## 10. Relation avec le firmware réel
+
+Le cœur de navigation actuel est partagé : le simulateur inclut directement
+`main/src/navigation/navigation.h`.
+
+Le firmware, lui, passe par `NavigationSelector.h`, qui sélectionne la version
+actuelle ou l'ancienne version selon `USE_OLD_NAVIGATION`.
+
+```text
+Firmware : NavigationSelector.h → navigation.h ou oldNavigation.h
+Simulation : navigation.h directement
 ```
 
-- premier argument : duree totale en millisecondes ;
-- second argument : pas de temps en millisecondes.
+Conséquence : changer `USE_OLD_NAVIGATION` ne change pas automatiquement la
+version testée par le simulateur.
 
-`100` signifie que la navigation et la physique sont mises a jour toutes les `100 ms`.
+Le simulateur ne reproduit pas non plus toute l'application embarquée. Il
+remplace notamment la gestion de mission, les capteurs, les servomoteurs, les
+communications et les erreurs matérielles par des équivalents simplifiés.
 
-## Comment ajouter un nouveau scenario
+## 11. Limites connues
 
-1. Copier une fonction existante, par exemple `runScenario6()`.
-2. La renommer, par exemple `runScenario7()`.
-3. Modifier depart, vent, cap, waypoints et duree.
-4. Ajouter l'appel dans `main()` :
+Il faut garder ces limites en tête lors de l'interprétation :
 
-```cpp
-if (scenario == 0 || scenario == 7) allScenarios.push_back(runScenario7());
-```
+- pas de courant marin, vagues, rafales ni dérive latérale réaliste ;
+- aucune imprécision GPS ou magnétique ;
+- réponse de voile et de gouvernail simplifiée ;
+- vitesse maximale arbitraire ;
+- certaines évolutions dépendent du nombre d'itérations autant que du temps ;
+- le calcul local de distance dans `sim_environment.cpp` simplifie trop la
+  longitude, surtout loin de l'équateur ;
+- la simulation teste directement `navigation.h`, pas le sélecteur du firmware ;
+- atteindre un waypoint en simulation ne garantit pas le même résultat en mer.
 
-5. Mettre a jour le message d'erreur qui liste les scenarios disponibles.
-6. Mettre a jour `simulation/Makefile` si `run-all` doit lancer ce nouveau scenario.
+Le calcul de longitude est une limite particulièrement importante : un degré de
+longitude ne représente pas la même distance qu'un degré de latitude. La
+navigation partagée utilise un calcul plus correct, mais certaines informations
+affichées par l'environnement peuvent être légèrement différentes.
 
-## Compiler et lancer
+## 12. Ordre de lecture conseillé
 
-Depuis le dossier `simulation` :
+Pour découvrir le code :
 
-```bash
-make
-./boat_simulator 3
-```
-
-Pour lancer tous les scenarios :
-
-```bash
-make run-all
-```
-
-Les fichiers generes sont dans `simulation/output/` :
-
-- CSV de trajectoire ;
-- CSV des waypoints ;
-- CSV des conditions initiales ;
-- `simulation.html` pour visualiser les scenarios sur une carte.
-
-## Export HTML
-
-Le fichier `simulation/export/sim_html_export.cpp` genere une page HTML avec :
-
-- carte Leaflet ;
-- onglets de scenarios ;
-- animation du bateau ;
-- slider temporel ;
-- affichage du mode de navigation ;
-- affichage du vent ;
-- affichage des waypoints.
-
-Les donnees viennent de `history`, c'est-a-dire de tous les etats sauvegardes par `SimulationEnvironment`.
-
-## Ou modifier quoi
-
-| Objectif | Fichier | Zone |
-|---|---|---|
-| Changer la logique de navigation | `boat/navigation.h` | `nav_handleNavigation()` |
-| Changer l'observation du vent | `boat/navigation.h` | `nav_handleWindObservation()` |
-| Changer les seuils reels | `boat/config_pins.h` | `WAYPOINT_DISTANCE`, `WIND_DISTANCE` |
-| Changer les seuils simulation | `simulation/sim_boat.hpp` | `WAYPOINT_DISTANCE_SIM`, `WIND_DISTANCE_SIM` |
-| Changer les scenarios | `simulation/sim_main.cpp` | `runScenarioX()` |
-| Changer la physique | `simulation/sim_environment.cpp` | `updateBoatDynamics()` |
-| Changer la vitesse max | `simulation/sim_environment.cpp` | `maxSpeed` |
-| Changer l'inertie | `simulation/sim_environment.cpp` | coefficient `0.05` |
-| Changer l'export HTML | `simulation/export/sim_html_export.cpp` | fonctions `write...()` |
-
-## Limites de la simulation
-
-La simulation est volontairement simplifiee.
-
-Elle ne modelise pas parfaitement :
-
-- les vagues ;
-- le courant ;
-- les rafales ;
-- le bruit GPS ;
-- les delais reels des servos ;
-- les erreurs de communication LoRa.
-
-Elle sert surtout a comprendre et tester la logique de navigation avant un essai reel.
+1. lire un scénario dans `sim_main.cpp` ;
+2. lire l'interface de `sim_boat.hpp` ;
+3. suivre `SimulatedBoat::stepSimulation(...)` ;
+4. lire `SimulationEnvironment::updateBoatDynamics(...)` ;
+5. utiliser [NAVIGATION.md](NAVIGATION.md) avant d'ouvrir `navigation.h` ;
+6. terminer par `exporter.cpp`, qui concerne surtout l'affichage.

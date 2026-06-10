@@ -1,284 +1,439 @@
-# AutoBoat - Documentation de la navigation
+# Comprendre la logique de navigation
 
-Ce document explique la logique de navigation du bateau et la simulation. Il est ecrit pour etre lu par des etudiants qui decouvrent le projet.
+Ce document explique comment le bateau choisit sa trajectoire. Il commence par
+les notions de voile nécessaires, puis relie chaque notion au code actuel dans
+`main/src/navigation/navigation.h`.
 
-## Idee generale
+Pour lancer les scénarios, voir [UTILISATION.md](UTILISATION.md). Pour comprendre
+le reste du simulateur, voir [CODE_ARCHITECTURE.md](CODE_ARCHITECTURE.md).
 
-AutoBoat est un voilier autonome. Il avance grace au vent, sans moteur de propulsion.
+## 1. Le problème à résoudre
 
-Le code doit donc repondre a trois questions en boucle :
+À chaque décision, le bateau connaît principalement :
 
-1. Ou est le bateau ?
-2. Ou est le prochain waypoint ?
-3. Comment regler la voile et le safran pour s'en rapprocher ?
+- sa position GPS ;
+- son cap ;
+- la direction estimée du vent ;
+- la position du waypoint à rejoindre ;
+- la position actuelle de la voile et du gouvernail ;
+- l'état conservé depuis la décision précédente.
 
-La logique principale est dans `boat/navigation.h`. Ce fichier est utilise par :
+Il doit choisir :
 
-- `boat/boat.ino` pour le bateau reel sur ESP32 ;
-- `simulation/sim_boat.cpp` pour la simulation sur ordinateur.
+- un angle de voile ;
+- un angle de gouvernail ;
+- un délai avant la prochaine décision ;
+- un mode de navigation ;
+- si le waypoint est atteint.
 
-Modifier `boat/navigation.h` modifie donc le comportement du bateau reel et de la simulation.
+La navigation ne déplace pas elle-même le bateau. Elle donne des ordres. Dans
+la simulation, `SimulationEnvironment` transforme ensuite ces ordres en
+mouvement.
 
-## Les grandeurs importantes
+## 2. Vocabulaire minimal
 
-Les angles sont en degres.
+### Cap
 
-| Grandeur | Signification |
-|---|---|
-| `boatHeading` | Cap actuel du bateau. `0` = nord, `90` = est, `180` = sud, `270` = ouest. |
-| `wptHeading` | Direction a suivre pour aller vers le waypoint courant. |
-| `wptDistance` | Distance entre le bateau et le waypoint courant. |
-| `windDir` | Direction d'ou vient le vent. |
-| `sailAngle` | Angle de l'aileron de voile : `-10` ou `+10`. |
-| `rudderAngle` | Decalage du safran. Valeur limitee par la navigation a `-20` / `+20`. |
-
-La fonction utilitaire la plus importante est :
-
-```cpp
-nav_relativeAngle(reference, target)
-```
-
-Elle renvoie l'angle de `target` par rapport a `reference`, entre `-180` et `+180`.
-
-- valeur positive : la cible est a droite / tribord ;
-- valeur negative : la cible est a gauche / babord.
-
-Exemple : si le bateau pointe vers le nord (`0`) et que le waypoint est a l'est (`90`), `nav_relativeAngle(0, 90)` vaut `+90`.
-
-## Cycle de vie du bateau
-
-Le firmware reel utilise la variable `boatMode`.
+Le cap est la direction vers laquelle pointe l'avant du bateau :
 
 ```text
-setup
-  -> setup-ready
-  -> route-ready
-  -> wind-observation
-  -> wind-ready
-  -> navigate
-  -> standby
+        0° nord
+           ↑
+270° ouest ← → 90° est
+           ↓
+       180° sud
 ```
 
-En pratique :
+### Waypoint
 
-| Mode | Role |
-|---|---|
-| `setup` | Demarrage du programme. |
-| `setup-ready` | GPS, LoRa, servos et batterie initialises. |
-| `route-ready` | Les waypoints ont ete recus. |
-| `wind-observation` | Le bateau avance pour estimer la direction du vent. |
-| `wind-ready` | La direction du vent est connue. |
-| `navigate` | Le bateau suit les waypoints. |
-| `standby` | Navigation terminee ou arretee. |
+Un waypoint est une cible GPS. La navigation calcule le relèvement, c'est-à-dire
+la direction depuis le bateau vers cette cible.
 
-Dans la simulation, les modes sont equivalents, mais les waypoints sont crees directement dans `sim_main.cpp` au lieu d'etre recus par LoRa.
+### Direction du vent
 
-## Observation du vent
+Dans ce projet, la direction indique d'où vient le vent.
 
-Le bateau n'a pas de capteur de vent. Il estime donc le vent par son mouvement.
-
-Dans `nav_handleWindObservation()` :
-
-1. Le bateau memorise sa position de depart.
-2. Il avance avec ses angles de servo actuels.
-3. Quand il a parcouru `WIND_DISTANCE` metres, le vent est considere acquis.
-4. La direction du vent est estimee par :
-
-```cpp
-windDirection = smoothHeading + 90 deg
+```text
+vent de 270° : il vient de l'ouest et souffle vers l'est
 ```
 
-Le code normalise ensuite l'angle entre `0` et `360`.
+Cette convention est essentielle. L'interprétation inverse produit une
+navigation incohérente.
 
-Dans le projet actuel :
+### Gouvernail
 
-- `WIND_DISTANCE` vaut `30 m` dans `boat/config_pins.h` ;
-- `WIND_DISTANCE_SIM` vaut aussi `30 m` dans `simulation/sim_boat.hpp`.
+Le gouvernail fait tourner le bateau. La navigation actuelle limite sa commande
+à environ `-20°` / `+20°`.
 
-En simulation, plusieurs scenarios appellent ensuite `setWindDirection(...)`. Cela force le vent connu par la navigation a la valeur exacte du scenario. C'est utile car l'estimation `cap + 90` est simplifiee et peut etre imprecise.
+### Voile
 
-## Navigation autonome
+La voile transforme le vent en propulsion. La logique actuelle utilise surtout
+deux positions simplifiées, `-10°` et `+10°`, choisies selon le côté du vent.
+
+### Lofer et abattre
+
+- **Lofer** : tourner vers la direction d'où vient le vent.
+- **Abattre** : tourner en s'éloignant de cette direction.
+
+### Virement et empannage
+
+- **Virement de bord** : l'avant du bateau traverse l'axe du vent.
+- **Empannage** : l'arrière du bateau traverse l'axe du vent.
+
+L'empannage demande une manœuvre contrôlée, car la voile peut changer de côté
+brutalement.
+
+## 3. Pourquoi le bateau ne va pas toujours tout droit
+
+Un voilier ne peut pas progresser efficacement dans toutes les directions.
+
+### Zone interdite face au vent
+
+La navigation considère une zone de `45°` de chaque côté de l'origine du vent.
+Un waypoint situé dans cette zone ne peut pas être visé directement.
+
+```text
+                 origine du vent
+                        ↑
+                   zone interdite
+                      /   \
+                     /     \
+                    ⛵
+```
+
+Le bateau choisit alors un cap praticable sur un côté, puis alterne les côtés :
+il tire des bords.
+
+### Zone sensible sous le vent
+
+Une zone de `20°` autour de la direction opposée au vent est également traitée
+à part. Elle évite de rester exactement vent arrière et permet de contrôler les
+empannages.
+
+## 4. Angles relatifs
+
+Le code convertit les directions absolues en angles relatifs compris entre
+`-180°` et `+180°`.
+
+```text
+angle relatif = direction cible - cap actuel
+```
+
+Après normalisation :
+
+- angle proche de `0°` : cible presque droit devant ;
+- angle positif : cible d'un côté du bateau ;
+- angle négatif : cible de l'autre côté ;
+- valeur proche de `180°` ou `-180°` : cible derrière.
 
 La fonction centrale est :
 
 ```cpp
-nav_handleNavigation(...)
+nav_relativeAngle(from, to)
 ```
 
-Elle ne deplace pas directement le bateau. Elle calcule seulement une decision :
+Cette représentation permet de choisir le sens de rotation le plus court sans
+se tromper au passage entre `359°` et `0°`.
 
-- angle d'aileron ;
-- angle de safran ;
-- mode de navigation ;
-- waypoint atteint ou non.
+## 5. Résultat et mémoire de navigation
 
-Le deplacement physique est ensuite fait par le firmware reel ou par `SimulationEnvironment` en simulation.
+### `NavResult`
 
-## Choix du cote de voile
+Chaque appel renvoie un résultat contenant notamment :
 
-Le bateau regarde d'abord le vent par rapport a son cap :
+| Champ | Rôle |
+|---|---|
+| `sailAngle` | commande de voile |
+| `rudderAngle` | commande de gouvernail |
+| `sendInterval` | délai proposé avant un nouvel envoi |
+| `mode` | nom court de la décision |
+| `logMessage` | explication destinée au diagnostic |
+| `windAcquired` | observation du vent terminée |
+| `waypointReached` | cible courante atteinte |
 
-```cpp
-windFromBoat = nav_relativeAngle(boatHeading, windDir)
-```
+### `NavState`
 
-Puis il place l'aileron du cote coherent :
+Certaines décisions durent plusieurs appels. `NavState` mémorise notamment :
 
-```cpp
-r.sailAngle = (windFromBoat >= 0) ? +10 : -10;
-```
+- le corridor associé au waypoint courant ;
+- le côté choisi pour les bords face au vent ;
+- le côté choisi sous le vent ;
+- l'étape en cours d'un empannage ;
+- la cible d'une manœuvre.
 
-Interpretation :
+Sans cet état, le bateau pourrait changer d'avis à chaque itération et osciller
+rapidement entre deux décisions.
 
-- vent a tribord : `sailAngle = +10` ;
-- vent a babord : `sailAngle = -10`.
+## 6. Ordre des décisions
 
-Dans la simulation, si le signe est mauvais, la voile est consideree peu efficace et le bateau avance beaucoup moins.
-
-## La logique oldNavigation
-
-La version actuelle de `navigation.h` est volontairement identique a `oldNavigation.h`.
-
-Elle utilise trois angles principaux :
-
-```cpp
-oppositeWind = nav_oppositeAngle(windDir);
-relativeWind = nav_relativeAngle(boatHeading, windDir);
-relativeWpt  = nav_relativeAngle(boatHeading, wptHeading);
-```
-
-Puis elle decide avec deux fonctions simples :
-
-- `nav_isBetween(angle, start, end)` : verifie si une direction est entre le cap du bateau et le cap du waypoint ;
-- `nav_sameSign(a, b)` : verifie si deux directions relatives sont du meme cote du bateau.
-
-## Les modes de navigation
-
-### 1. VDB
-
-Le mode VDB est choisi si le vent ou l'oppose du vent se trouve entre le cap actuel du bateau et le cap vers le waypoint :
-
-```cpp
-if (nav_isBetween(oppositeWind, boatHeading, wptHeading) ||
-    nav_isBetween(windDir, boatHeading, wptHeading)) {
-    ...
-}
-```
-
-Dans ce cas, le code met directement le safran en butee et place la voile selon le cote du vent :
-
-```cpp
-if (relativeWind < 0) {
-    rudderAngle = 20;
-    sailAngle = -10;
-} else {
-    rudderAngle = -20;
-    sailAngle = 10;
-}
-```
-
-Ce mode sert a changer de bord quand la route directe est problematique par rapport au vent.
-
-### 2. Lofer
-
-Si le bateau n'est pas en VDB, le code regarde si le vent et le waypoint sont du meme cote du bateau.
-
-Condition :
-
-```cpp
-nav_sameSign(relativeWind, relativeWpt)
-```
-
-Si oui, le bateau lofe. Le safran n'est pas recalcule depuis zero : il est modifie progressivement par pas de `5 deg`.
-
-```cpp
-if (relativeWind < 0) {
-    sailAngle = -10;
-    rudderAngle = currentRudderAngle + 5;
-} else {
-    sailAngle = 10;
-    rudderAngle = currentRudderAngle - 5;
-}
-```
-
-### 3. Abattre
-
-Si le bateau n'est pas en VDB et que le vent et le waypoint sont de cotes opposes, le bateau abat.
-
-Comme pour lofer, le safran est modifie progressivement par pas de `5 deg`, mais dans le sens oppose :
-
-```cpp
-if (relativeWind < 0) {
-    sailAngle = -10;
-    rudderAngle = currentRudderAngle - 5;
-} else {
-    sailAngle = 10;
-    rudderAngle = currentRudderAngle + 5;
-}
-```
-
-### 4. Direct
-
-Le resultat est initialise avec le mode `"direct"`, mais dans la pratique cette version du code remplace ensuite ce mode par `"vdb"`, `"lofer"` ou `"abattre"`.
-
-Il n'y a pas de zone morte ni de correction proportionnelle dans cette version. C'est justement une difference importante avec l'autre algorithme.
-
-## Atteinte d'un waypoint
-
-La navigation signale qu'un waypoint est atteint si :
-
-```cpp
-wptDistance <= waypointDistance
-```
-
-Valeurs actuelles :
-
-- reel : `WAYPOINT_DISTANCE = 10 m` ;
-- simulation : `WAYPOINT_DISTANCE_SIM = 10 m`.
-
-Quand un waypoint est atteint :
-
-- s'il reste un waypoint, la simulation passe au suivant ;
-- sinon elle passe en `standby`.
-
-## Comment lire une decision de navigation
-
-A chaque appel de `nav_handleNavigation()`, on peut resumer la decision ainsi :
+`nav_handleNavigationWithState(...)` suit cet ordre général :
 
 ```text
-cap bateau + cap waypoint + vent
-  -> calcul de oppositeWind, relativeWind, relativeWpt
-  -> si windDir ou oppositeWind est entre cap bateau et cap waypoint : VDB
-  -> sinon, si relativeWind et relativeWpt ont le meme signe : lofer
-  -> sinon : abattre
-  -> appliquer voile et safran
-  -> tester si le waypoint est atteint
+Waypoint atteint ?
+    oui → signaler l'arrivée
+    non
+      ↓
+Empannage déjà commencé ?
+    oui → poursuivre ses étapes
+    non
+      ↓
+Waypoint face au vent ou rotation traversant le vent ?
+    oui → mode face au vent, tirer des bords
+    non
+      ↓
+Waypoint sous le vent ?
+    oui → mode vent arrière contrôlé
+    non
+      ↓
+Rotation directe traversant l'axe arrière ?
+    oui → commencer un empannage
+    non
+      ↓
+Cible presque devant ?
+    oui → tout droit
+    non → lofer ou abattre
 ```
 
-## Parametres a modifier
+Cet ordre compte : une manœuvre déjà engagée est terminée avant de reprendre une
+décision normale.
 
-Dans cette version, il y a peu de constantes explicites dans `navigation.h`. Les valeurs importantes sont directement dans le code.
+## 7. Navigation directe
 
-| Valeur | Ou | Effet |
-|---|---|
-| `20` / `-20` | branche VDB | Butee de safran pendant un changement de bord. |
-| `10` / `-10` | toutes les branches | Angle de voile selon le cote du vent. |
-| `+5` / `-5` | branches lofer et abattre | Increment progressif du safran a chaque appel. |
-| `sendInterval = 300` | VDB | Frequence plus rapide pendant VDB. |
-| `sendInterval = 2000` | lofer / abattre | Frequence normale de navigation. |
+Dans les modes de manœuvre, `nav_applyTargetHeading(...)` calcule :
 
-Les distances sont dans :
+```text
+erreur = différence entre cap actuel et cap cible
+commande de gouvernail = erreur × gain
+```
 
-- `boat/config_pins.h` pour le bateau reel ;
-- `simulation/sim_boat.hpp` pour la simulation.
+La commande est ensuite limitée à `20°`. Plus l'erreur est grande, plus le
+gouvernail braque, jusqu'à cette limite.
 
-## Conseils pour les etudiants
+Hors des zones interdites, si le waypoint est à moins de `5°` de l'avant, le
+bateau est considéré correctement aligné et le gouvernail revient à zéro.
+Sinon, le code ne vise pas directement le relèvement avec cette formule : il
+choisit de lofer ou d'abattre et modifie la commande de gouvernail par pas de
+`5°`.
 
-Pour changer le comportement de navigation, commencer par modifier un seul parametre a la fois.
+## 8. Navigation face au vent
 
-Exemples :
+Si le waypoint se trouve dans la zone interdite face au vent, la navigation
+construit deux caps possibles :
 
-- si le bateau tourne trop fort en VDB, diminuer les valeurs `20` / `-20` ;
-- si le bateau corrige trop lentement en lofer ou abattre, augmenter le pas `5` ;
-- si le bateau corrige trop brutalement en lofer ou abattre, diminuer le pas `5` ;
-- si les waypoints sont valides trop tot ou trop tard, modifier `WAYPOINT_DISTANCE` et `WAYPOINT_DISTANCE_SIM`.
+```text
+cap bâbord  = direction du vent - 45°
+cap tribord = direction du vent + 45°
+```
+
+Elle choisit d'abord le cap qui fait réellement progresser vers le waypoint.
+Ce point évite de choisir un bord uniquement parce qu'il demande une petite
+rotation alors qu'il éloignerait le bateau de sa cible.
+
+Le bateau conserve ensuite ce côté jusqu'à sortir de son corridor. À ce moment,
+il change de bord pour revenir vers la route générale.
+
+La trajectoire attendue ressemble à ceci :
+
+```text
+                waypoint
+                   ▲
+          / \      │
+         /   \     │ route générale
+        /     \    │
+       ⛵
+```
+
+## 9. Le corridor de route
+
+Lorsqu'un nouveau waypoint devient actif, le code mémorise :
+
+- la position de départ du segment ;
+- la position du waypoint ;
+- la direction et la longueur du segment.
+
+Cela définit un corridor autour de la route idéale :
+
+```text
+limite gauche  +--------------------------+
+               | départ ---------- cible |
+limite droite  +--------------------------+
+```
+
+La demi-largeur actuelle vaut `100 m`. Le bateau peut donc s'écarter de part et
+d'autre, mais un écart plus important déclenche un choix de bord destiné à le
+ramener vers la route.
+
+La fonction `nav_crossTrackErrorMeters(...)` calcule la distance signée à cette
+route :
+
+- le signe indique le côté ;
+- la valeur absolue indique l'écart en mètres.
+
+Le corridor évite deux problèmes :
+
+- changer de bord beaucoup trop souvent ;
+- continuer longtemps dans une direction qui éloigne de la route.
+
+## 10. Détection de l'arrivée
+
+Le cas simple est :
+
+```text
+distance au waypoint ≤ rayon d'arrivée
+```
+
+Dans le simulateur, ce rayon est fixé à `10 m` par
+`WAYPOINT_DISTANCE_SIM` dans `sim_boat.hpp`.
+
+Le code traite aussi le cas où le bateau dépasse légèrement la cible entre deux
+calculs. Le waypoint est alors atteint si :
+
+1. la projection du bateau a dépassé le plan perpendiculaire à la fin du
+   segment ;
+2. le bateau reste dans la largeur du corridor.
+
+```text
+route -------- waypoint | plan d'arrivée
+                         |     ⛵ dépassé
+```
+
+Cette règle évite qu'un grand pas de temps oblige le bateau à faire demi-tour
+pour quelques mètres.
+
+## 11. Navigation sous le vent
+
+Quand la cible est trop proche de l'axe exactement opposé au vent, le bateau
+choisit un cap décalé de `20°`.
+
+Comme face au vent, il conserve un côté et utilise le corridor pour décider
+quand changer. L'objectif est d'avancer vers la cible sans rester sur un axe où
+la voile et le changement de côté deviennent difficiles à contrôler.
+
+## 12. Empannage contrôlé
+
+Si le chemin de rotation le plus court traverse l'axe arrière du vent, la
+navigation lance une petite machine à états.
+
+Elle réalise la manœuvre en plusieurs appels au lieu de changer brutalement de
+commande en une seule fois. `NavState` conserve la phase courante jusqu'à ce que
+le cap intermédiaire ou final soit atteint.
+
+Le point important pour le lecteur est qu'un cap temporairement différent du
+waypoint peut être volontaire : le bateau termine d'abord l'empannage.
+
+## 13. Choix de la voile
+
+`nav_setSailForHeading(...)` compare le cap visé et la direction du vent. La
+voile est placée d'un côté ou de l'autre avec une amplitude simplifiée de
+`10°`.
+
+Ce n'est pas un réglage continu et réaliste de voile. Le modèle cherche surtout
+à conserver une convention cohérente entre :
+
+- le côté d'où vient le vent ;
+- le côté de la voile ;
+- le modèle physique du simulateur.
+
+## 14. Observation du vent
+
+Avant la navigation, `nav_handleWindObservation(...)` attend une phase
+d'observation. Dans le simulateur, l'estimation est acquise lorsque le bateau
+s'est éloigné de `30 m` de sa position de départ.
+
+La méthode estime le vent à partir du cap et d'un décalage de `90°`. Elle
+représente une procédure simplifiée, pas un véritable algorithme de fusion de
+capteurs.
+
+Une mauvaise estimation du vent décale toutes les zones interdites. Le bateau
+peut alors tirer des bords au mauvais endroit ou tenter une route impossible.
+
+## 15. Exemple concret
+
+Supposons :
+
+```text
+cap actuel       : 90°  (est)
+vent             : 0°   (vient du nord)
+waypoint         : 10°  (presque face au vent)
+```
+
+Le waypoint est à moins de `45°` de l'origine du vent. La navigation ne vise
+donc pas `10°` directement. Elle compare les deux caps praticables :
+
+```text
+315° = 0° - 45°
+45°  = 0° + 45°
+```
+
+Elle choisit celui qui apporte la meilleure progression initiale, le conserve
+jusqu'à la limite du corridor, puis change de côté. La trajectoire est plus
+longue qu'une ligne droite, mais elle respecte la contrainte du voilier.
+
+## 16. Paramètres principaux
+
+Les constantes actuelles se trouvent au début de `navigation.h` :
+
+| Paramètre | Valeur | Effet |
+|---|---:|---|
+| zone morte directe | `5°` | évite de corriger une petite erreur |
+| gain direct | `0,5` | intensité du gouvernail en navigation normale |
+| gain VDB | `0,8` | intensité pendant certains changements de bord |
+| limite gouvernail | `20°` | braquage maximal demandé |
+| demi-largeur corridor | `100 m` | écart toléré autour de la route |
+| zone face au vent | `45°` | angle interdit de chaque côté du vent |
+| zone sous le vent | `20°` | angle évité autour du vent arrière |
+| incrément lofer/abattre | `5°` | variation de gouvernail par décision |
+| angle de voile | `10°` | position simplifiée de la voile |
+
+Modifier ces valeurs change le comportement global. Il faut donc les tester sur
+plusieurs situations, pas uniquement sur un trajet.
+
+## 17. Version actuelle et ancienne version
+
+Le firmware inclut `NavigationSelector.h`. La constante
+`USE_OLD_NAVIGATION` dans `NavigationConfig.h` détermine la version utilisée :
+
+```text
+0 → navigation.h
+1 → oldNavigation.h
+```
+
+Le simulateur inclut directement `navigation.h`. Il teste donc toujours la
+version actuelle, indépendamment de `USE_OLD_NAVIGATION`.
+
+## 18. Points de vigilance
+
+La logique reste simplifiée et possède des limites :
+
+- les commandes de lofer/abattre changent par appel, donc leur vitesse dépend de
+  la fréquence d'exécution ;
+- le vent observé est une estimation très simplifiée ;
+- le réglage de voile ne représente pas une vraie optimisation ;
+- le corridor est construit en approximation locale, adaptée aux trajets
+  relativement courts ;
+- le simulateur ne modélise pas le courant et les vagues ;
+- la physique simulée et les capteurs réels peuvent réagir différemment ;
+- `sendInterval` exprime une intention de rythme, mais la boucle du simulateur
+  utilise son propre pas de temps.
+
+Pour analyser une trajectoire surprenante, regarder dans cet ordre :
+
+1. la direction réelle donnée au vent ;
+2. le waypoint actif et son rayon ;
+3. le mode de navigation affiché ;
+4. le cap cible et le cap actuel ;
+5. l'écart au corridor ;
+6. l'état d'un éventuel empannage ;
+7. le comportement du modèle physique.
+
+## 19. Ordre de lecture du code
+
+Après ce document, l'ordre suivant limite les allers-retours :
+
+1. `NavResult` et `NavState` ;
+2. les fonctions de normalisation des angles ;
+3. les calculs GPS et de corridor ;
+4. `nav_applyTargetHeading(...)` ;
+5. les fonctions face au vent et sous le vent ;
+6. la machine à états d'empannage ;
+7. `nav_handleNavigationWithState(...)`, qui orchestre le tout.
