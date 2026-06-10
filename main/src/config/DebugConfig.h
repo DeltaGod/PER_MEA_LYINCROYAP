@@ -4,6 +4,10 @@
 // Set to 0 before water deployment — saves ~400 bytes RAM and removes serial latency.
 #define DEBUG_MODE 0
 
+// Set DEBUG_VERBOSE 1 for high-frequency debug prints (100 ms interval).
+// Set to 0 for energy-saving mode (500 ms in auto mode, 100 ms in manual/failsafe).
+#define DEBUG_VERBOSE 0
+
 #if DEBUG_MODE
 // DBG("TAG", "fmt", args...)  →  [DBG:TAG] fmt\n
 // Tag must be a string literal.

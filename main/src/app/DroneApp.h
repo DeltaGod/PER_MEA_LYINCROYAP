@@ -45,18 +45,29 @@ private:
     ControlMode     activeMode_       = ControlMode::Failsafe;
     ControlMode     prevMode_         = ControlMode::Failsafe;
     float           lastBatVolts_     = 0.0f;
+    bool            batteryLow_       = false;  // Task 3: emergency flag for rapid battery checks
     uint32_t        lastGpsChars_     = 0;
     uint32_t        lastControlMs_    = 0;
     uint32_t        lastBatMs_        = 0;
     uint32_t        lastDebugMs_      = 0;
     uint32_t        lastLoraMs_       = 0;
+    uint32_t        lastLoraImmediateMs_ = 0;  // Task 2: force immediate TX after command RX
 
     static constexpr uint32_t CONTROL_PERIOD_MS = 20;    // 50 Hz
-    static constexpr uint32_t BAT_PERIOD_MS     = 250;   // 4 Hz
-    static constexpr uint32_t DEBUG_PERIOD_MS   = 200;   // 5 Hz
-    static constexpr uint32_t LORA_PERIOD_MS    = 1000;  // 1 Hz heartbeat
+    static constexpr uint32_t BAT_PERIOD_MS     = 250;   // 4 Hz (standard, will be adapted per mode)
+    static constexpr uint32_t DEBUG_PERIOD_MS   = 200;   // 5 Hz (standard, will be adapted per mode)
+    static constexpr uint32_t LORA_PERIOD_MS    = 1000;  // 1 Hz heartbeat (will be adapted per mission state)
+    
+    // Task 1: Adaptive debug frequency
+    static constexpr uint32_t DEBUG_FAST_MS     = 100;   // 10 Hz for manual/failsafe modes
+    static constexpr uint32_t DEBUG_SLOW_MS     = 500;   // 2 Hz for autonomous modes (energy saving)
+    
+    // Task 3: Adaptive battery polling
+    static constexpr uint32_t BAT_FAST_MS       = 250;   // 4 Hz for failsafe mode (rapid battery check)
+    static constexpr uint32_t BAT_SLOW_MS       = 1000;  // 1 Hz for autonomous/idle modes (energy saving)
 
     void controlTick(uint32_t nowMs);
     void debugTick();
     void loraHbTick();
+    void notifyLoraCommandReceived();  // Task 2: signal immediate LoRa TX
 };

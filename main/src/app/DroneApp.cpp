@@ -72,21 +72,64 @@ void DroneApp::update() {
         lastControlMs_ = now;
     }
 
-    if (static_cast<uint32_t>(now - lastBatMs_) >= BAT_PERIOD_MS) {
-        lastBatVolts_ = battery_.readVolts();
-        lastBatMs_    = now;
+    // Task 3: Adaptive battery polling frequency
+    // Fast (250 ms) in failsafe mode or if battery is low; Slow (1000 ms) in auto/manual modes
+    uint32_t batPeriod = BAT_SLOW_MS;
+    if (activeMode_ == ControlMode::Failsafe || batteryLow_) {
+        batPeriod = BAT_FAST_MS;
     }
 
-    if (static_cast<uint32_t>(now - lastLoraMs_) >= LORA_PERIOD_MS) {
+    if (static_cast<uint32_t>(now - lastBatMs_) >= batPeriod) {
+        lastBatVolts_ = battery_.readVolts();
+        // Task 3: Emergency check — if battery drops critically, stay in fast polling
+        batteryLow_ = (lastBatVolts_ < 5.0f);  // ~3S LiPo minimum voltage
+        lastBatMs_  = now;
+    }
+
+    // Task 2: Adaptive LoRa heartbeat frequency
+    // Running: 1s (unchanged), Idle: 5-10s (energy saving), Failsafe: 1-2s (alert)
+    uint32_t loraPeriod = LORA_PERIOD_MS;
+    if (activeMode_ == ControlMode::Automatic) {
+        // Check mission state for adaptive heartbeat
+        MissionState mState = mission_.state();
+        if (mState == MissionState::Idle) {
+            loraPeriod = 10000;  // 10 s in idle (max energy saving while waiting)
+        }
+        // Running/Returning: stay at 1000 ms
+        // (implicit: no change to loraPeriod)
+    } else if (activeMode_ == ControlMode::Failsafe) {
+        loraPeriod = 2000;  // 2 s in failsafe (frequent alerts)
+    }
+    // Manual modes: stay at 1000 ms
+
+    // Force immediate TX if a command was just received (Task 2)
+    bool forceImmediateTx = (static_cast<uint32_t>(now - lastLoraImmediateMs_) < 100);
+
+    if (forceImmediateTx || static_cast<uint32_t>(now - lastLoraMs_) >= loraPeriod) {
         loraHbTick();
         lastLoraMs_ = now;
+        lastLoraImmediateMs_ = 0;  // Clear the force flag
     }
 
-    if (static_cast<uint32_t>(now - lastDebugMs_) >= DEBUG_PERIOD_MS) {
+    // Task 1: Adaptive debug print frequency
+    // Fast (100 ms) in manual/failsafe modes (detailed diagnostics on bench)
+    // Slow (500 ms) in autonomous mode (energy saving, less serial I/O)
+    uint32_t debugPeriod = DEBUG_FAST_MS;
+#if DEBUG_VERBOSE
+    // If DEBUG_VERBOSE is enabled, always use fast period
+    debugPeriod = DEBUG_FAST_MS;
+#else
+    // Otherwise, adapt: slow in auto mode, fast in manual/failsafe
+    if (activeMode_ == ControlMode::Automatic) {
+        debugPeriod = DEBUG_SLOW_MS;
+    }
+#endif
+
+    if (static_cast<uint32_t>(now - lastDebugMs_) >= debugPeriod) {
         debugTick();
         lastDebugMs_ = now;
     }
-}
+}}
 
 void DroneApp::controlTick(uint32_t nowMs) {
     lastFrame_  = rc_.readFrame();
@@ -193,4 +236,9 @@ void DroneApp::loraHbTick() {
         mission_.currentIndex(),
         mission_.waypointCount()
     );
+}
+
+// Task 2: Signal that a LoRa command was received — force immediate next heartbeat TX
+void DroneApp::notifyLoraCommandReceived() {
+    lastLoraImmediateMs_ = millis();
 }

@@ -73,6 +73,9 @@ void LoRaComm::dispatch(const char* json) {
         return;
     }
 
+    // Task 2: Notify DroneApp that a command was received — trigger immediate heartbeat TX
+    notifyCommandReceived();
+
     if (strstr(msg, "\"waypoints\"")) {
         handleWaypoints(msg);
     } else if (strstr(msg, "\"wind-command\"")) {

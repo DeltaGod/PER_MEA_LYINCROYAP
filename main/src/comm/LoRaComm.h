@@ -17,6 +17,7 @@ public:
 
     uint32_t txCount()    const { return txCount_; }
     int      lastRxRssi() const { return lastRxRssi_; }
+    void     notifyCommandReceived() { if (app_) app_->notifyLoraCommandReceived(); }  // Task 2: trigger immediate HB TX
 
 private:
     LoRaRadio* radio_      = nullptr;
