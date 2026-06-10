@@ -15,7 +15,7 @@ static const double NAV_DIRECT_DEAD_ZONE_DEG = 5.0;
 static const double NAV_VDB_RUDDER_GAIN = 0.8;
 static const double NAV_DIRECT_RUDDER_GAIN = 0.5;
 static const float NAV_RUDDER_LIMIT_DEG = 20.0f;
-static const double NAV_DEFAULT_CORRIDOR_HALF_WIDTH_M = 20.0;
+static const double NAV_DEFAULT_CORRIDOR_HALF_WIDTH_M = 100.0;
 static const double NAV_GEO_EPSILON_DEG = 0.0000001;
 static const double NAV_EARTH_RADIUS_M = 6371000.0;
 static const double NAV_UPWIND_FORBIDDEN_ANGLE_DEG = 45.0;
@@ -95,6 +95,24 @@ inline double nav_crossTrackErrorMeters(double startLatDeg, double startLngDeg,
   return (pathNorthM * boatEastM - pathEastM * boatNorthM) / pathLengthM;
 }
 
+inline bool nav_hasPassedWaypoint(double startLatDeg, double startLngDeg,
+                                  double endLatDeg, double endLngDeg,
+                                  double boatLatDeg, double boatLngDeg) {
+  double pathEastM, pathNorthM, boatEastM, boatNorthM;
+  nav_gpsDeltaMeters(startLatDeg, startLngDeg, endLatDeg, endLngDeg, pathEastM,
+                     pathNorthM);
+  nav_gpsDeltaMeters(startLatDeg, startLngDeg, boatLatDeg, boatLngDeg,
+                     boatEastM, boatNorthM);
+
+  double pathLengthSquared =
+      pathEastM * pathEastM + pathNorthM * pathNorthM;
+  if (pathLengthSquared < 0.01)
+    return false;
+
+  return boatEastM * pathEastM + boatNorthM * pathNorthM >=
+         pathLengthSquared;
+}
+
 inline int nav_sideMovingTowardCrossTrack(double startLatDeg,
                                           double startLngDeg, double endLatDeg,
                                           double endLngDeg, double axisDeg,
@@ -128,6 +146,28 @@ inline int nav_sideMovingTowardCrossTrack(double startLatDeg,
         bestScore = score;
         bestSide = side;
       }
+    }
+  }
+
+  return bestSide;
+}
+
+inline int nav_sideMovingTowardWaypoint(double axisDeg, double safeAngleDeg,
+                                        double waypointHeadingDeg,
+                                        int fallbackSide) {
+  int bestSide = fallbackSide;
+  double bestProgress = -2.0;
+  double waypointHeadingRad = waypointHeadingDeg * M_PI / 180.0;
+
+  for (int side = -1; side <= 1; side += 2) {
+    double headingRad = nav_normalizeAngle(axisDeg + side * safeAngleDeg) *
+                        M_PI / 180.0;
+    double progress =
+        std::sin(headingRad) * std::sin(waypointHeadingRad) +
+        std::cos(headingRad) * std::cos(waypointHeadingRad);
+    if (progress > bestProgress) {
+      bestProgress = progress;
+      bestSide = side;
     }
   }
 
@@ -305,6 +345,7 @@ inline void nav_handleEmpannageLoop(NavResult &result, NavState &state,
 inline void nav_handleForbiddenZone(NavResult &result, NavState &state,
                                     double boatHeadingDeg, double boatLatDeg,
                                     double boatLngDeg, double windAxisDeg,
+                                    double waypointHeadingDeg,
                                     double relativeWind, bool hasCorridor,
                                     double corridorHalfWidthM, bool upwind) {
   int &side = upwind ? state.upwindSide : state.downwindSide;
@@ -316,8 +357,12 @@ inline void nav_handleForbiddenZone(NavResult &result, NavState &state,
                                   : "Waypoint in downwind forbidden zone";
   int sendInterval = upwind ? 300 : 2000;
 
-  if (side == 0)
-    side = nav_angleSide(nav_relativeAngle(windAxisDeg, boatHeadingDeg));
+  if (side == 0) {
+    int currentSide =
+        nav_angleSide(nav_relativeAngle(windAxisDeg, boatHeadingDeg));
+    side = nav_sideMovingTowardWaypoint(
+        windAxisDeg, forbiddenAngle, waypointHeadingDeg, currentSide);
+  }
   if (hasCorridor) {
     side = nav_corridorSide(state, boatLatDeg, boatLngDeg, corridorHalfWidthM,
                             windAxisDeg, forbiddenAngle, side);
@@ -331,8 +376,9 @@ inline void nav_handleForbiddenZone(NavResult &result, NavState &state,
 inline void nav_handleDownwindZigzag(NavResult &result, NavState &state,
                                      double boatHeadingDeg, double boatLatDeg,
                                      double boatLngDeg, double windDirectionDeg,
-                                     double oppositeWind, double relativeWind,
-                                     bool hasCorridor,
+                                     double oppositeWind,
+                                     double waypointHeadingDeg,
+                                     double relativeWind, bool hasCorridor,
                                      double corridorHalfWidthM) {
   if (state.downwindSide == 0) {
     state.downwindSide =
@@ -354,7 +400,7 @@ inline void nav_handleDownwindZigzag(NavResult &result, NavState &state,
   }
 
   nav_handleForbiddenZone(result, state, boatHeadingDeg, boatLatDeg, boatLngDeg,
-                          oppositeWind, relativeWind, false,
+                          oppositeWind, waypointHeadingDeg, relativeWind, false,
                           corridorHalfWidthM, false);
 }
 
@@ -415,6 +461,19 @@ inline NavResult nav_handleNavigationWithState(
                                      waypointLngDeg, corridorHalfWidthM);
   nav_updateCorridor(state, hasCorridor, boatLatDeg, boatLngDeg, waypointLatDeg,
                      waypointLngDeg);
+  if (state.corridor.initialized &&
+      nav_hasPassedWaypoint(
+          state.corridor.startLatDeg, state.corridor.startLngDeg,
+          state.corridor.targetLatDeg, state.corridor.targetLngDeg, boatLatDeg,
+          boatLngDeg) &&
+      std::abs(nav_crossTrackErrorMeters(
+          state.corridor.startLatDeg, state.corridor.startLngDeg,
+          state.corridor.targetLatDeg, state.corridor.targetLngDeg, boatLatDeg,
+          boatLngDeg)) <= corridorHalfWidthM) {
+    result.waypointReached = true;
+    nav_resetState(state);
+    return result;
+  }
 
   double oppositeWind = nav_oppositeAngle(windDirectionDeg);
   double relativeWind = nav_relativeAngle(boatHeadingDeg, windDirectionDeg);
@@ -435,12 +494,13 @@ inline NavResult nav_handleNavigationWithState(
                              oppositeWind, relativeWind);
   } else if (waypointUpwind || directCrossesUpwind) {
     nav_handleForbiddenZone(result, state, boatHeadingDeg, boatLatDeg,
-                            boatLngDeg, windDirectionDeg, relativeWind,
-                            hasCorridor, corridorHalfWidthM, true);
+                            boatLngDeg, windDirectionDeg, waypointHeadingDeg,
+                            relativeWind, hasCorridor, corridorHalfWidthM, true);
   } else if (waypointDownwind) {
     nav_handleDownwindZigzag(result, state, boatHeadingDeg, boatLatDeg,
                              boatLngDeg, windDirectionDeg, oppositeWind,
-                             relativeWind, hasCorridor, corridorHalfWidthM);
+                             waypointHeadingDeg, relativeWind, hasCorridor,
+                             corridorHalfWidthM);
   } else if (directCrossesDownwind) {
     if (state.downwindSide == 0) {
       state.downwindSide =

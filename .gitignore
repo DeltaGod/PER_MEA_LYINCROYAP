@@ -1,0 +1,6 @@
+.codex
+simulation/*.o
+simulation/boat_simulator
+simulation/export/*.o
+simulation/mocks/*.o
+simulation/output/
