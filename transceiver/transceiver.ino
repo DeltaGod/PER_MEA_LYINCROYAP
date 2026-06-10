@@ -4,10 +4,13 @@
   Runs on a second LilyGO T-Beam V1.1 connected to a PC via USB.
   Bridges USB serial (115200 baud) <-> LoRa 433 MHz.
 
-  RX: prints drone heartbeat JSON + RSSI to serial
-  TX: accepts shorthand commands or raw JSON, wraps them and sends via LoRa
+  RX: forwards drone heartbeat JSON to serial as a single clean JSON line.
+      No prefix — serial_link.py can parse it directly.
 
-  Commands (type in serial monitor, send with Enter):
+  TX: accepts raw JSON from IHM (serial_link.py) and transmits via LoRa.
+      Also accepts shorthand commands for manual testing in the serial monitor.
+
+  Shorthand commands (serial monitor only):
     navigate                → start autonomous mission
     stop                    → stop mission
     restart                 → reboot the drone
@@ -15,15 +18,16 @@
     wind <0-359>            → set wind direction manually (degrees)
     home <lat,lon>          → set home / return point
     wpt <lat,lon,lat,lon,…> → load waypoints in Linear mode
-    {…raw JSON…}            → pass through unchanged — use for scripting
+    {…raw JSON…}            → pass through unchanged (used by IHM)
 
-  Note on wpt: LoRa packets are max 255 bytes.  With the JSON wrapper (~80 chars)
+  Note on wpt: LoRa packets are max 255 bytes. With the JSON wrapper (~80 chars)
   you have ~170 chars for coordinates — roughly 8 waypoints at full precision.
-  Use fewer decimal places to fit more waypoints.
 */
 
 #include <SPI.h>
 #include <LoRa.h>
+#include <Wire.h>
+#include <axp20x.h>
 
 // T-Beam V1.1 LoRa SPI pins
 #define LORA_SCK   5
@@ -31,44 +35,56 @@
 #define LORA_MOSI  27
 #define LORA_CS    18
 #define LORA_IRQ   26
-// RST: GPIO23 on T-Beam V1.1.  Change to 23 if this board is used only as
-// transceiver (no RC receiver on GPIO23).  Leave -1 to skip hardware reset.
-#define LORA_RST   (-1)
+#define LORA_RST   23      // GPIO23 — present on T-Beam V1.1 PCB
 #define LORA_BAND  433E6
 
-// ---------- forward declarations ----------
-static void sendCmd(const char* json);
+// T-Beam V1.1 I2C bus (AXP192 power management)
+#define I2C_SDA    21
+#define I2C_SCL    22
+
+static AXP20X_Class axp;
+
+static void sendJson(const char* json);
 static void handleInput(String& line);
 
 // ==========================================
 void setup() {
   Serial.begin(115200);
   delay(300);
-  Serial.println("=== SeaDrone Ground Station ===");
 
+  // 1. AXP192: enable LoRa power rail (LDO2) before touching SPI.
+  //    On T-Beam V1.1, SX1276 is powered by LDO2 — without this step
+  //    LoRa.begin() will fail.
+  Wire.begin(I2C_SDA, I2C_SCL);
+  Wire.setClock(400000);
+  if (axp.begin(Wire, AXP192_SLAVE_ADDRESS) == AXP_PASS) {
+    axp.setLDO2Voltage(3300);
+    axp.setPowerOutPut(AXP192_LDO2, AXP202_ON);   // LoRa SX1276
+    axp.setDCDC1Voltage(3300);
+    axp.setPowerOutPut(AXP192_DCDC1, AXP202_ON);  // 3.3V board rail
+    Serial.println("[AXP]  OK");
+  } else {
+    Serial.println("[AXP]  WARN: init failed — LoRa may not power up");
+  }
+
+  // 2. LoRa radio
   SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_CS);
   LoRa.setPins(LORA_CS, LORA_RST, LORA_IRQ);
 
   if (LoRa.begin(LORA_BAND) != 1) {
-    Serial.println("[LORA] ERROR: init failed — check wiring / power");
+    Serial.println("[LORA] ERROR: init failed — check SPI wiring / AXP192 LDO2");
     for (;;);
   }
-  Serial.println("[LORA] OK — 433 MHz, listening…");
-  Serial.println("Commands: navigate | stop | restart | wind-obs | wind <deg>");
-  Serial.println("          home <lat,lon> | wpt <lat,lon,lat,lon,…> | {raw JSON}");
-  Serial.println("---");
+  Serial.println("[LORA] OK — 433 MHz, listening");
 }
 
 // ==========================================
 void loop() {
   // --- RX: LoRa packet → Serial ---
+  // Print raw JSON only — serial_link.py parses lines starting with '{'
   int pktSize = LoRa.parsePacket();
   if (pktSize > 0) {
-    String data = LoRa.readString();
-    Serial.print("[RX rssi=");
-    Serial.print(LoRa.packetRssi());
-    Serial.print("] ");
-    Serial.println(data);
+    Serial.println(LoRa.readString());
   }
 
   // --- TX: Serial line → LoRa ---
@@ -81,45 +97,38 @@ void loop() {
 }
 
 // ==========================================
-// Send a null-terminated JSON string via LoRa and echo it to serial
-static void sendCmd(const char* json) {
+static void sendJson(const char* json) {
   LoRa.beginPacket();
   LoRa.print(json);
   LoRa.endPacket();
-  Serial.print("[TX] ");
-  Serial.println(json);
 }
 
 // ==========================================
-// Parse a line from serial and build the corresponding command JSON
 static void handleInput(String& line) {
 
-  // Raw JSON pass-through (for scripting / Python server)
+  // Raw JSON pass-through — used by IHM serial_link.py
   if (line.startsWith("{")) {
     char buf[256];
     line.toCharArray(buf, sizeof(buf));
-    sendCmd(buf);
+    sendJson(buf);
     return;
   }
 
-  // --- navigate ---
+  // Shorthand commands for manual testing via serial monitor
+
   if (line.equalsIgnoreCase("navigate")) {
-    sendCmd("{\"origin\":\"server\",\"type\":\"command\",\"message\":{\"navigate\":true}}");
+    sendJson("{\"origin\":\"server\",\"type\":\"command\",\"message\":\"navigate\"}");
 
-  // --- stop ---
   } else if (line.equalsIgnoreCase("stop")) {
-    sendCmd("{\"origin\":\"server\",\"type\":\"command\",\"message\":{\"stop\":true}}");
+    sendJson("{\"origin\":\"server\",\"type\":\"command\",\"message\":\"stop\"}");
 
-  // --- restart ---
   } else if (line.equalsIgnoreCase("restart")) {
-    sendCmd("{\"origin\":\"server\",\"type\":\"command\",\"message\":{\"restart\":true}}");
+    sendJson("{\"origin\":\"server\",\"type\":\"command\",\"message\":\"restart\"}");
 
-  // --- wind-obs / wind-observation ---
   } else if (line.equalsIgnoreCase("wind-obs") ||
              line.equalsIgnoreCase("wind-observation")) {
-    sendCmd("{\"origin\":\"server\",\"type\":\"command\",\"message\":{\"wind-observation\":true}}");
+    sendJson("{\"origin\":\"server\",\"type\":\"command\",\"message\":\"wind-observation\"}");
 
-  // --- wind <deg> ---
   } else if (line.startsWith("wind ") || line.startsWith("wind\t")) {
     int deg = line.substring(5).toInt();
     if (deg < 0 || deg > 359) {
@@ -131,9 +140,8 @@ static void handleInput(String& line) {
       "{\"origin\":\"server\",\"type\":\"command\","
       "\"message\":{\"wind-command\":{\"value\":%d}}}",
       deg);
-    sendCmd(buf);
+    sendJson(buf);
 
-  // --- home <lat,lon> ---
   } else if (line.startsWith("home ") || line.startsWith("home\t")) {
     String args = line.substring(5);
     args.trim();
@@ -149,9 +157,8 @@ static void handleInput(String& line) {
       "{\"origin\":\"server\",\"type\":\"command\","
       "\"message\":{\"home\":{\"lat\":%.6f,\"lon\":%.6f}}}",
       lat, lon);
-    sendCmd(buf);
+    sendJson(buf);
 
-  // --- wpt <lat,lon,lat,lon,...> ---
   } else if (line.startsWith("wpt ") || line.startsWith("wpt\t")) {
     String pts = line.substring(4);
     pts.trim();
@@ -159,7 +166,6 @@ static void handleInput(String& line) {
       Serial.println("[ERR] wpt: no coordinates given");
       return;
     }
-    // Count waypoints: N pairs → 2N values → 2N-1 commas → N = (commas+1)/2
     int commas = 0;
     for (size_t i = 0; i < pts.length(); i++) if (pts[i] == ',') commas++;
     int n = (commas + 1) / 2;
@@ -176,11 +182,12 @@ static void handleInput(String& line) {
       Serial.println("[ERR] wpt: command too long for LoRa packet (max ~8 waypoints at full precision)");
       return;
     }
-    sendCmd(buf);
+    sendJson(buf);
 
   } else {
     Serial.print("[ERR] unknown command: ");
     Serial.println(line);
-    Serial.println("      try: navigate | stop | restart | wind <deg> | home <lat,lon> | wpt <lat,lon,...>");
+    Serial.println("      try: navigate | stop | restart | wind-obs | wind <deg>");
+    Serial.println("           home <lat,lon> | wpt <lat,lon,...> | {raw JSON}");
   }
 }

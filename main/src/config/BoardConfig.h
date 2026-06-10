@@ -48,9 +48,9 @@ static constexpr uint16_t RC_MID_US     = 1500;
 static constexpr uint16_t RC_MAX_US     = 2000;
 static constexpr uint16_t RC_DEADBAND_US = 35;
 
-// Mode selector thresholds — CH5 three-position switch
-// <1000 → Automatic | 1400–1600 → ManualServo | >1800 → ManualProp
-static constexpr uint16_t CH5_AUTO_THRESHOLD      = 1000;  // below → Automatic
+// Mode selector thresholds — CH5 three-position switch (PTR-6A outputs ~1000/1500/2000 µs)
+// ≤1250 → Automatic | 1400–1600 → ManualServo | >1800 → ManualProp
+static constexpr uint16_t CH5_AUTO_THRESHOLD      = 1250;  // at or below → Automatic
 static constexpr uint16_t CH5_SAIL_LOW_US         = 1400;  // ManualServo band low
 static constexpr uint16_t CH5_SAIL_HIGH_US        = 1600;  // ManualServo band high
 static constexpr uint16_t CH5_PROP_THRESHOLD      = 1800;  // above → ManualProp
