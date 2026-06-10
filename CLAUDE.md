@@ -333,8 +333,10 @@ GPS hardware notes: board requires LiPo battery for warm starts (without battery
 
 | Module | File | Status | Notes |
 |---|---|---|---|
-| `navigation.h` | `navigation/navigation.h` | ✅ | Algorithm ported from github DeltaGod/PER_MEA_LYINCROYAP — upwind/downwind zigzag, gybe avoidance (empannage), cross-track corridor, lofer/abattre. **Do not change logic.** |
-| `AutoController` | `control/AutoController.h/.cpp` | ✅ | Wraps navigation.h; persists rudder/sail angle state; maps nav rudder **1:1 to physical winch degrees, clamped ±ROTOR_AUTO_RANGE_DEG=20°** (full ±90° was too aggressive) |
+| `navigation.h` | `navigation/navigation.h` | ✅ | **Upgraded 2026-06-10 to DeltaGod/PER_MEA_LYINCROYAP branch `Testautoboat`** — upwind/downwind zigzag, gybe avoidance (empannage), cross-track corridor, lofer/abattre. **New vs prior port:** smarter initial tack via `nav_sideMovingTowardWaypoint()` (picks side making most progress to the waypoint, not just wind-axis side); "passed-the-waypoint-plane within corridor" arrival check via `nav_hasPassedWaypoint()`; default corridor half-width 20→**100 m**. Public entry points (`nav_handleNavigationWithState`, `nav_handleWindObservation`) UNCHANGED — drop-in. **Do not change logic.** |
+| `NavigationConfig.h` / `NavigationSelector.h` | `navigation/` | ✅ | Compile-time switch: `USE_OLD_NAVIGATION` (default 0 = current `navigation.h`; 1 = `oldNavigation.h`). AutoController includes the selector, not navigation.h directly. |
+| `oldNavigation.h` | `navigation/oldNavigation.h` | ✅ | Legacy fallback (same public names, empty `NavState{}`). NOT compiled unless the switch is flipped. |
+| `AutoController` | `control/AutoController.h/.cpp` | ✅ | Includes `NavigationSelector.h`; persists rudder/sail angle state; maps nav rudder **1:1 to physical winch degrees, clamped ±ROTOR_AUTO_RANGE_DEG=20°** (full ±90° was too aggressive). NOTE: AutoController itself kept as Facundo's adaptation — Testautoboat's AutoController/DroneApp/LoRaComm/ManualController were NOT merged (they predate the single-ESC + unified-manual + heartbeat work). |
 | `DroneApp` | `app/DroneApp.h/.cpp` | ✅ | controlTick dispatches to AutoController in Automatic+Failsafe when target active & wind valid |
 
 ### Post_GPT (reference only — do not modify)

@@ -1,6 +1,6 @@
 #pragma once
 #include "../core/Types.h"
-#include "../navigation/navigation.h"
+#include "../navigation/NavigationSelector.h"
 
 class AutoController {
 public:
