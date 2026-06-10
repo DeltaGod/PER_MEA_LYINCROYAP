@@ -39,6 +39,7 @@ let resetTransceiverButton = document.getElementById("resetTransceiverButton");
 let windObsSection = document.getElementById("windObsSection");
 let windObsBar = document.getElementById("windObsBar");
 let windObsValue = document.getElementById("windObsValue");
+let windObsCancelButton = document.getElementById("windObsCancelButton");
 
 let boatMarker;     // The current boat location
 let boatRoute;      // The route history for the boat
@@ -128,7 +129,7 @@ function pollBoatMessages() {
             updateWaypoints(message.waypoints.total, message.waypoints.current);
         }
         // Mesure du vent en cours : barre de progression.
-        updateWindObs(message.hasOwnProperty('wobs') ? message.wobs : null);
+        updateWindObs(message);
 
         // Alimente la prédiction de trajectoire (si la carte est prête).
         if (message.hasOwnProperty('location') && typeof feedTelemetry === 'function') {
@@ -555,23 +556,31 @@ function updateBoatMode(newBoatMode) {
     boatModeDisplay.textContent = newBoatMode;
 }
 
-// Mesure du vent : affiche la barre de progression tant que "wobs" est présent.
-// pct = null → mesure inactive → on cache la section.
-function updateWindObs(pct) {
+// Mesure du vent : affiche la barre tant que "wobs" est présent dans le message.
+// Sans "wobs" → mesure inactive → section cachée.
+// Si 0 % sans fix GPS → on indique l'attente plutôt qu'une barre figée à 0 %.
+function updateWindObs(message) {
     if (!windObsSection) {
         return;
     }
-    if (pct === null || pct === undefined) {
+    if (!message || !message.hasOwnProperty("wobs")) {
         windObsSection.style.display = "none";
         return;
     }
-    const p = Math.max(0, Math.min(100, Number(pct)));
+
+    const p = Math.max(0, Math.min(100, Number(message.wobs) || 0));
+    const hasFix = Number(message.fix) === 1;
+
     windObsSection.style.display = "";
     if (windObsBar) {
         windObsBar.style.width = p + "%";
     }
     if (windObsValue) {
-        windObsValue.textContent = p + "%";
+        if (p === 0 && !hasFix) {
+            windObsValue.textContent = "attente fix GPS…";
+        } else {
+            windObsValue.textContent = p + "%";
+        }
     }
 }
 
@@ -710,11 +719,45 @@ navigateButton.addEventListener("click", () => {
 });
 
 // Send the wind observation order to the boat
-windObservationButton.addEventListener("click", () => {
-    fetch('/api/wind-observation', {
-        method: 'GET',
-    });
+windObservationButton.addEventListener("click", async () => {
+    try {
+        const response = await fetch('/api/wind-observation', { method: 'GET' });
+        const result = await response.json().catch(() => ({}));
+
+        if (!response.ok || result.status === "error") {
+            console.error("Erreur mesure vent :", result);
+            alert("Erreur lors du lancement de la mesure du vent.");
+            return;
+        }
+        alert("Mesure du vent lancée.\n\nLe bateau doit être en mode Auto, avec un fix GPS, " +
+              "et se déplacer (~30 m) pour que la mesure progresse.");
+    } catch (error) {
+        console.error("Erreur réseau mesure vent :", error);
+        alert("Impossible de contacter le serveur.");
+    }
 });
+
+// Annuler la mesure du vent (réutilise /api/stop : stopMission() met
+// windObsActive_=false côté bateau). La section disparaîtra dès que le
+// bateau cessera d'envoyer "wobs".
+if (windObsCancelButton) {
+    windObsCancelButton.addEventListener("click", async () => {
+        if (!confirm("Annuler la mesure du vent ?")) {
+            return;
+        }
+        try {
+            const response = await fetch('/api/stop', { method: 'GET' });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok || result.status === "error") {
+                console.error("Erreur annulation mesure :", result);
+                alert("Erreur lors de l'annulation.");
+            }
+        } catch (error) {
+            console.error("Erreur réseau annulation mesure :", error);
+            alert("Impossible de contacter le serveur.");
+        }
+    });
+}
 
 restartButton.addEventListener("click", () => {
     if (confirm("⚠️ Redémarrer ? ⚠️")) {

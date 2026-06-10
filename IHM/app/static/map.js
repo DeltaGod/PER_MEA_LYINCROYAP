@@ -100,6 +100,22 @@ function bindUiEvents() {
         });
     }
 
+    // Touche Échap → efface TOUS les waypoints sélectionnés.
+    document.addEventListener("keydown", (event) => {
+        if (event.key !== "Escape") {
+            return;
+        }
+        // Ne pas interférer avec une saisie en cours.
+        const tag = (document.activeElement && document.activeElement.tagName) || "";
+        if (tag === "INPUT" || tag === "TEXTAREA") {
+            return;
+        }
+        if (state.waypoints.length > 0) {
+            clearRoute();
+            console.log("Waypoints effacés (Échap)");
+        }
+    });
+
     console.log("Événements UI connectés");
 }
 
@@ -208,6 +224,7 @@ function clearRoute() {
 
     clearMapRouteDisplay();
     updateWaypointList();
+    clearTrajectory();   // la trajectoire prévue n'a plus de cible
 
     console.log("Route effacée");
 }
@@ -284,12 +301,11 @@ function updateWaypointList() {
 
         const text = document.createElement("span");
         text.textContent =
-            `WP${index + 1} : lat=${waypoint.lat.toFixed(6)}, ` +
-            `lon=${waypoint.lon.toFixed(6)}, ` +
-            `rayon=${waypoint.radius_m.toFixed(1)} m `;
+            `WP${index + 1}: ${waypoint.lat.toFixed(5)}, ${waypoint.lon.toFixed(5)}`;
 
         const deleteButton = document.createElement("button");
-        deleteButton.textContent = "Supprimer";
+        deleteButton.textContent = "✖";
+        deleteButton.title = "Supprimer ce waypoint";
         deleteButton.addEventListener("click", () => {
             removeWaypoint(index);
         });
