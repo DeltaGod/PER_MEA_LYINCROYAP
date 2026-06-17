@@ -84,8 +84,8 @@ The drone is a sail-powered surface vehicle. The key mechanics:
   - Full hardware range is 1000–2000 µs (±3 turns = ±1080°), limited to ±83 µs from center for controllability
 - CH4 measured travel: CH4_MIN_US=1180, CH4_MAX_US=1790 (center ~1500 µs) — maps to ROTOR_MIN/MAX in manual mode
 - Auto-mode rudder uses only ±ROTOR_AUTO_RANGE_DEG=20° of winch travel (full ±90° too aggressive)
-- ESC: 1000 µs (stop) to 2000 µs (full throttle); single ESC on GPIO15
-- **Propeller (manual mode):** CH3 inverse — CH3_FULL_US=1100 → 100 %, CH3_ZERO_US=1990 → 0 %. Below PROP_MIN_FRACTION=0.10 (10 %) → forced 0 %. **No software arming gesture** (removed — see Section 13)
+- ESC **BIDIRECTIONAL** (2026-06-10): ESC_REVERSE_MIN_US=1000 (−100 % reverse), ESC_NEUTRAL_US=1500 (neutral/stop, = ESC_STOP_US), ESC_MAX_US=2000 (+100 % forward); single ESC on GPIO15. ⚠️ Reverse only physically works if the ESC is programmed for bidirectional throttle via the **EPRG-3 card** — otherwise <1500 µs is ignored.
+- **Propeller (manual mode):** CH3 bidirectional ratchet throttle — CH3_FULL_US=1100 → +100 % forward, CH3_CENTER_US=1545 → 0 % stop (deadband ESC_CENTER_DEADBAND_US=40 µs), CH3_ZERO_US=1990 → −100 % reverse. CH3=0 (lost) → neutral. **No software arming gesture** (removed — see Section 13). CH3_CENTER_US needs bench verification.
 - Slew rate limit: 30 µs/tick (prevents hard jerks on actuator changes)
 - Battery divider: R5=562kΩ (battery→ADC), R6=120kΩ (GND), ratio=5.683, GPIO36 ADC1_CH0
 
@@ -605,6 +605,9 @@ The Arduino IDE only compiles `.cpp` files that are in the same folder as the `.
 | 2026-06-10 | USB auto-detection by serial. Both boards are Silicon Labs **CP2104** with unique factory serials. `config.py` resolves the transceiver port from `/dev/serial/by-id/` by `TRANSCEIVER_SERIAL` (no udev/root needed); `serial_link.py` re-resolves on every (re)connect and reconnects on disconnect/USB re-enumeration (opens with dsrdtr/rtscts=False to avoid resetting the ESP32). Added `99-autoboat.rules` (optional fixed `/dev/ttyAUTOBOAT_TRX`/`_BOAT`). **Serials: transceiver=01C00B54, boat=02126CF1** (initially had them swapped — corrected after reading both boards). |
 | 2026-06-10 | start/stop scripts rewritten for reliability. `stop_ihm.sh`: SIGTERM→SIGKILL escalation, frees port 5000 (kills the uvicorn reload worker that kept the webserver alive), `docker compose down --remove-orphans` + `docker rm -f` (mongo no longer survives via restart:unless-stopped), verifies each component. `start_ihm.sh`: runs stop first (clean slate), truncates logs, launches Python with `-u` (live logs). Tested end-to-end: stop → 0 procs/port free/mongo down; start → all up, transceiver auto-detected on ttyUSB1, data flowing. |
 | 2026-06-10 | Hardware finding: the **boat's USB connection flaps** (kernel `cp210x ... status -19`, disconnect→reattach with a new ttyUSBn) — caused by the boat running on USB only with a dead battery (0.81 V) → brownouts drop the bus. Not a software issue; the serial_link reconnect-by-serial logic tolerates it, but stable telemetry needs the boat properly powered (LiPo). |
+| 2026-06-10 | **Navigation upgraded to colleague's `Testautoboat` branch** (DeltaGod/PER_MEA_LYINCROYAP): new `navigation.h` (smarter initial tack via `nav_sideMovingTowardWaypoint`, passed-waypoint-plane arrival via `nav_hasPassedWaypoint`, corridor 20→100 m) + `NavigationConfig.h`/`NavigationSelector.h`/`oldNavigation.h` compile-time switch. Public entry points unchanged → drop-in; AutoController include retargeted to the selector. Only navigation ported — Facundo's AutoController/DroneApp/LoRaComm/ManualController kept. Compiles 28 %/7 %. |
+| 2026-06-10 | **Manual propeller → BIDIRECTIONAL** (±100 %). ESC neutral moved 1000→**1500 µs** (ESC_NEUTRAL_US, =ESC_STOP_US): CH3 ratchet maps CH3_FULL(1100)=+100 % fwd / CH3_CENTER(1545)=stop (±40 µs deadband) / CH3_ZERO(1990)=−100 % rev. Coherence updates: ActuatorCommand default esc1Us 1000→1500, McpwmActuators init 1500 + write clamp lower bound → ESC_REVERSE_MIN_US(1000), AUTO_ESC_* shifted to forward half (1600/1700/1850). ⚠️ Reverse needs the ESC in bidirectional mode (EPRG-3 card) — not yet confirmed done. Compiles 28 %/7 %. |
+| 2026-06-10 | Diagnosis (not a code bug): motor running **in pulses** at ~7 V is the ESC's **low-voltage cutoff** tripping under load (2S at 3.5 V/cell sags below LVC; worse if EPRG-3 cell-count is mis-set). Fix = full LiPo charge + program ESC cell count/LVC. Also: flashing the boat failed repeatedly — same brownout (chip stops mid-write, CP2104 re-enumerates); needs LiPo / manual BOOT-button entry. |
 
 ---
 
@@ -614,11 +617,11 @@ The Arduino IDE only compiles `.cpp` files that are in the same folder as the `.
 One mode (`computeManual`) drives servos **and** propeller together. Entered only when CH5 > 1800.
 - **CH2 → sail (binary):** center deadband ±35 µs. First frame initializes sail state from stick position to avoid snap on mode entry. Inside deadband: hold last state.
 - **CH4 → rotor (positional):** CH4 measured range 1180–1790 µs maps to ROTOR_MIN_US–ROTOR_MAX_US (1417–1583 µs = ±90°). Deadband ±35 µs around center snaps to ROTOR_CENTER_US (1500). The Regatta ECO II holds its position.
-- **CH3 → propeller (inverse):** `frac = (1990 − CH3) / (1990 − 1100)`, clamped [0,1]. `frac < 0.10 → 0`. `esc1Us = 1000 + frac × 1000`. Safety: **CH3 == 0 (lost) → ESC stop**.
-- **Channel-loss guard:** if CH2 or CH4 read 0, `update()` resets sail state and returns safe neutral (ActuatorCommand defaults).
+- **CH3 → propeller (BIDIRECTIONAL ratchet, 2026-06-10):** `diff = CH3 − CH3_CENTER_US(1545)`. `|diff| ≤ ESC_CENTER_DEADBAND_US(40) → ESC_NEUTRAL_US(1500)`. Forward side (`diff<0`, toward CH3_FULL_US=1100): `frac=(center−CH3)/(center−1100)` → `esc1Us = 1500 + frac×(2000−1500)`. Reverse side (`diff>0`, toward CH3_ZERO_US=1990): `frac=(CH3−center)/(1990−center)` → `esc1Us = 1500 − frac×(1500−1000)`. Safety: **CH3 == 0 (lost) → ESC_NEUTRAL_US**. ⚠️ Reverse requires the ESC in bidirectional mode (EPRG-3). Replaces the old inverse 0–100 % throttle + 10 % low-deadzone.
+- **Channel-loss guard:** if CH2 or CH4 read 0, `update()` resets sail state and returns safe neutral (ActuatorCommand defaults — esc1Us now 1500).
 
 ### Sail mode (CH5 middle) — inert
-Does nothing: DroneApp outputs `ActuatorCommand{}` defaults (sail 1520, rotor 1500, esc 1000) and resets the manual controller. Out-of-band CH5 values also fall back to Sail.
+Does nothing: DroneApp outputs `ActuatorCommand{}` defaults (sail 1520, rotor 1500, **esc 1500 = neutral**) and resets the manual controller. Out-of-band CH5 values also fall back to Sail.
 
 ### ESC arming — REMOVED (2026-06-10)
 The old "hold CH3 ≤1300 µs for 2 s" gesture was dropped: it is incompatible with the new inverse throttle (idle is now CH3 high ≈1990, not low) and was not requested. The 10 % low-deadzone + the actuator slew limiter are the safety. The ESC still arms via its own firmware (sees idle at power-on if the boat boots with CH3 at 0 %). To re-add a startup interlock, gate the throttle until CH3 has been seen at 0 % once after entering Manual.
