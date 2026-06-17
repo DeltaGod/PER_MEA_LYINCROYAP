@@ -1,0 +1,14 @@
+.codex
+simulation/*.o
+simulation/*.d
+simulation/boat_simulator
+simulation/export/*.o
+simulation/export/*.d
+simulation/mocks/*.o
+simulation/mocks/*.d
+simulation/output/
+
+# Native unit-test build artifacts
+test/build/
+test_runner
+!simulation/output/.gitkeep

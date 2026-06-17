@@ -21,6 +21,37 @@ inline bool nav_sameSign(double angle1, double angle2) {
     return (angle1 >= 0 && angle2 >= 0) || (angle1 < 0 && angle2 < 0);
 }
 
+static const float NAV_RUDDER_CORRECTION_LIMIT_DEG = 20.0f;
+static const float NAV_RUDDER_COMMAND_LIMIT_DEG = 110.0f;
+
+inline float nav_clampRudderCorrection(float angleDeg) {
+    if (angleDeg > NAV_RUDDER_CORRECTION_LIMIT_DEG)
+        return NAV_RUDDER_CORRECTION_LIMIT_DEG;
+    if (angleDeg < -NAV_RUDDER_CORRECTION_LIMIT_DEG)
+        return -NAV_RUDDER_CORRECTION_LIMIT_DEG;
+    return angleDeg;
+}
+
+inline float nav_rudderCompensation(double relativeWindDeg) {
+    return static_cast<float>(relativeWindDeg / 2.0);
+}
+
+inline float nav_rudderCorrection(float servoCommandDeg,
+                                  double relativeWindDeg) {
+    return nav_clampRudderCorrection(
+        servoCommandDeg - nav_rudderCompensation(relativeWindDeg));
+}
+
+inline float nav_rudderCommand(float correctionDeg, double relativeWindDeg) {
+    float commandDeg = nav_rudderCompensation(relativeWindDeg) +
+                       nav_clampRudderCorrection(correctionDeg);
+    if (commandDeg > NAV_RUDDER_COMMAND_LIMIT_DEG)
+        return NAV_RUDDER_COMMAND_LIMIT_DEG;
+    if (commandDeg < -NAV_RUDDER_COMMAND_LIMIT_DEG)
+        return -NAV_RUDDER_COMMAND_LIMIT_DEG;
+    return commandDeg;
+}
+
 inline double nav_oppositeAngle(double angle) {
     double opposite = angle + 180;
     if (opposite >= 360) opposite -= 360;
@@ -90,6 +121,8 @@ inline NavResult nav_handleNavigation(
     double oppositeWind = nav_oppositeAngle(windDir);
     double relativeWind = nav_relativeAngle(boatHeading, windDir);
     double relativeWpt = nav_relativeAngle(boatHeading, wptHeading);
+    float currentCorrection =
+        nav_rudderCorrection(currentRudderAngle, relativeWind);
 
     if (nav_isBetween(oppositeWind, boatHeading, wptHeading) ||
         nav_isBetween(windDir, boatHeading, wptHeading)) {
@@ -107,10 +140,10 @@ inline NavResult nav_handleNavigation(
     } else if (nav_sameSign(relativeWind, relativeWpt)) {
         if (relativeWind < 0) {
             r.sailAngle = -10;
-            r.rudderAngle = currentRudderAngle + 5;
+            r.rudderAngle = currentCorrection + 5;
             r.logMessage = "Lofer relativeWind < 0";
         } else {
-            r.rudderAngle = currentRudderAngle - 5;
+            r.rudderAngle = currentCorrection - 5;
             r.sailAngle = 10;
             r.logMessage = "Lofer relativeWind > 0";
         }
@@ -118,15 +151,17 @@ inline NavResult nav_handleNavigation(
     } else {
         if (relativeWind < 0) {
             r.sailAngle = -10;
-            r.rudderAngle = currentRudderAngle - 5;
+            r.rudderAngle = currentCorrection - 5;
             r.logMessage = "Abattre relativeWind < 0";
         } else {
-            r.rudderAngle = currentRudderAngle + 5;
+            r.rudderAngle = currentCorrection + 5;
             r.sailAngle = 10;
             r.logMessage = "Abattre relativeWind > 0";
         }
         r.mode = "abattre";
     }
+
+    r.rudderAngle = nav_rudderCommand(r.rudderAngle, relativeWind);
 
     if (wptDistance <= waypointDistance) {
         r.waypointReached = true;
