@@ -31,15 +31,19 @@ static constexpr float    ROTOR_RANGE_DEG = 90.0f; // physical half-travel for R
 // this limit. Tune here if the boat under/over-steers in auto mode.
 static constexpr float    ROTOR_AUTO_RANGE_DEG = 20.0f; // ±20° winch travel in auto
 
-// Pro-Tronik Black Fet ESCs
-static constexpr uint16_t ESC_STOP_US    = 1000;  // motor off
-static constexpr uint16_t ESC_MAX_US     = 2000;  // full throttle
-static constexpr uint16_t ESC_ARM_MAX_US = 1300;  // throttle must be ≤ this to trigger arming
-static constexpr uint32_t ESC_ARM_MS     = 2000;  // hold time required to arm
+// Pro-Tronik Black Fet ESCs — BIDIRECTIONAL throttle (avant / arrière).
+//   1000 µs = pleine marche ARRIÈRE | 1500 µs = neutre/arrêt | 2000 µs = pleine marche AVANT
+// IMPORTANT : la marche arrière n'existe que si l'ESC est programmé en mode
+// bidirectionnel via la carte EPRG-3. Sinon < 1500 µs est ignoré (reste à l'arrêt).
+static constexpr uint16_t ESC_REVERSE_MIN_US = 1000;  // -100 % (pleine marche arrière)
+static constexpr uint16_t ESC_NEUTRAL_US     = 1500;  //    0 % (neutre / arrêt)
+static constexpr uint16_t ESC_MAX_US         = 2000;  // +100 % (pleine marche avant)
+// "Stop" canonique = neutre : utilisé au boot, en failsafe, mode Sail et arrêt auto.
+static constexpr uint16_t ESC_STOP_US        = ESC_NEUTRAL_US;
 
-// Propulseur en mode manuel : en dessous de cette fraction de puissance,
-// la commande est ramenée à 0 % (zone morte basse, évite les démarrages parasites).
-static constexpr float PROP_MIN_FRACTION = 0.10f;
+// Manette de gaz à crans : largeur (en µs de CH3 autour de son centre) traitée
+// comme neutre, pour avoir un vrai point d'arrêt franc au milieu de la course.
+static constexpr uint16_t ESC_CENTER_DEADBAND_US = 40;
 
 // ESC slew rate (µs per control tick) — protects drivetrain from brutal throttle jumps
 static constexpr uint16_t ESC_SLEW_US = 30;
@@ -55,8 +59,10 @@ static constexpr float AUTO_PROP_TARGET_SPEED_KMPH = 2.0f;
 static constexpr float AUTO_PROP_STOP_RADIUS_M = 15.0f;
 static constexpr float AUTO_PROP_HEADING_MAX_DEG = 70.0f;
 
-static constexpr uint16_t AUTO_ESC_MIN_US    = 1100;
-static constexpr uint16_t AUTO_ESC_CRUISE_US = 1300;
-static constexpr uint16_t AUTO_ESC_MAX_US    = 1550;
+// Marche AVANT uniquement en mode auto (neutre = 1500 µs depuis le passage en
+// bidirectionnel) : ces seuils restent au-dessus du neutre.
+static constexpr uint16_t AUTO_ESC_MIN_US    = 1600;
+static constexpr uint16_t AUTO_ESC_CRUISE_US = 1700;
+static constexpr uint16_t AUTO_ESC_MAX_US    = 1850;
 
 } // namespace Calibration

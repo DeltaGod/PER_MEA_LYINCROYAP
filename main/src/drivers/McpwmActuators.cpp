@@ -73,7 +73,7 @@ void McpwmActuators::write(const ActuatorCommand& cmd) {
     const uint16_t rotor = clamp(cmd.rotorUs,
                              Calibration::ROTOR_MIN_US,
                              Calibration::ROTOR_MAX_US);
-    const uint16_t e1t   = clamp(cmd.esc1Us,  Calibration::ESC_STOP_US, Calibration::ESC_MAX_US);
+    const uint16_t e1t   = clamp(cmd.esc1Us,  Calibration::ESC_REVERSE_MIN_US, Calibration::ESC_MAX_US);
 
     outEsc1Us_ = slew(outEsc1Us_, e1t, Calibration::ESC_SLEW_US);
 

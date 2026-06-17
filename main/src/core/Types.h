@@ -21,7 +21,7 @@ struct RcFrame {
 struct ActuatorCommand {
     uint16_t sailUs  = 1520;  // Futaba S3003 center
     uint16_t rotorUs = 1500;  // Regatta ECO II stopped
-    uint16_t esc1Us  = 1000;  // stopped
+    uint16_t esc1Us  = 1500;  // neutre / arrêt (ESC bidirectionnel)
 };
 
 struct GpsPosition {

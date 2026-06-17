@@ -58,22 +58,42 @@ ActuatorCommand ManualController::computeManual(const RcFrame& frame) {
                             Calibration::ROTOR_MIN_US, Calibration::ROTOR_MAX_US);
     }
 
-    // --- Propulseur : CH3 INVERSE (1100 µs = 100 %, 1990 µs = 0 %) ---
-    // Sécurité : CH3 perdu (0) → arrêt moteur.
+    // --- Propulseur : CH3 BIDIRECTIONNEL (marche avant / arrière) ---
+    // Manette à crans (ne se recentre pas) :
+    //   CH3 → CH3_FULL_US (1100) : +100 % AVANT   (ESC_MAX_US, 2000 µs)
+    //   CH3 → centre             :    0 % ARRÊT    (ESC_NEUTRAL_US, 1500 µs)
+    //   CH3 → CH3_ZERO_US (1990) : -100 % ARRIÈRE  (ESC_REVERSE_MIN_US, 1000 µs)
+    // Zone morte au centre → neutre franc. Sécurité : CH3 perdu (0) → neutre.
+    // NB : la marche arrière n'agit que si l'ESC est programmé en mode
+    // bidirectionnel (carte EPRG-3) ; sinon < 1500 µs reste à l'arrêt.
     if (frame.ch3 == 0) {
-        cmd.esc1Us = Calibration::ESC_STOP_US;
+        cmd.esc1Us = Calibration::ESC_NEUTRAL_US;
     } else {
-        const uint16_t ch3 = clamp(frame.ch3,
-                                   BoardConfig::CH3_FULL_US, BoardConfig::CH3_ZERO_US);
-        float frac = static_cast<float>(BoardConfig::CH3_ZERO_US - ch3) /
-                     static_cast<float>(BoardConfig::CH3_ZERO_US - BoardConfig::CH3_FULL_US);
-        // Zone morte basse : sous 10 % de puissance → 0 %.
-        if (frac < Calibration::PROP_MIN_FRACTION) {
-            frac = 0.0f;
+        const uint16_t ch3    = clamp(frame.ch3,
+                                      BoardConfig::CH3_FULL_US, BoardConfig::CH3_ZERO_US);
+        const int      center = static_cast<int>(BoardConfig::CH3_CENTER_US);
+        const int      diff   = static_cast<int>(ch3) - center;  // <0 = avant, >0 = arrière
+
+        if (diff >= -static_cast<int>(Calibration::ESC_CENTER_DEADBAND_US) &&
+            diff <=  static_cast<int>(Calibration::ESC_CENTER_DEADBAND_US)) {
+            cmd.esc1Us = Calibration::ESC_NEUTRAL_US;
+        } else if (diff < 0) {
+            // Côté avant : du centre (0 %) vers CH3_FULL_US (+100 %).
+            float frac = static_cast<float>(center - ch3) /
+                         static_cast<float>(center - BoardConfig::CH3_FULL_US);
+            if (frac > 1.0f) frac = 1.0f;
+            cmd.esc1Us = static_cast<uint16_t>(
+                Calibration::ESC_NEUTRAL_US +
+                frac * (Calibration::ESC_MAX_US - Calibration::ESC_NEUTRAL_US));
+        } else {
+            // Côté arrière : du centre (0 %) vers CH3_ZERO_US (-100 %).
+            float frac = static_cast<float>(ch3 - center) /
+                         static_cast<float>(BoardConfig::CH3_ZERO_US - center);
+            if (frac > 1.0f) frac = 1.0f;
+            cmd.esc1Us = static_cast<uint16_t>(
+                Calibration::ESC_NEUTRAL_US -
+                frac * (Calibration::ESC_NEUTRAL_US - Calibration::ESC_REVERSE_MIN_US));
         }
-        cmd.esc1Us = static_cast<uint16_t>(
-            Calibration::ESC_STOP_US +
-            frac * (Calibration::ESC_MAX_US - Calibration::ESC_STOP_US));
     }
 
     return cmd;

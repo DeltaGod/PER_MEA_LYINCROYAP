@@ -17,7 +17,7 @@ public:
 
 private:
     bool     initialized_ = false;
-    uint16_t outEsc1Us_   = 1000;
+    uint16_t outEsc1Us_   = 1500;  // démarre au neutre (ESC bidirectionnel)
     uint16_t prevSailUs_  = 0;   // last logged sail value (0 = not yet logged)
     uint16_t prevRotorUs_ = 0;   // last logged rotor value
 

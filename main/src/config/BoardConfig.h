@@ -53,10 +53,13 @@ static constexpr uint16_t RC_DEADBAND_US = 35;
 static constexpr uint16_t CH4_MIN_US = 1180;
 static constexpr uint16_t CH4_MAX_US = 1790;
 
-// CH3 — propulsion en mode manuel. Commande INVERSE :
-// manche bas = pleine puissance, manche haut = arrêt.
-static constexpr uint16_t CH3_FULL_US = 1100;  // 100 % propulsion
-static constexpr uint16_t CH3_ZERO_US = 1990;  //   0 % propulsion
+// CH3 — propulsion BIDIRECTIONNELLE en mode manuel (manette à crans).
+//   manche vers CH3_FULL_US (bas)  = +100 % marche AVANT
+//   centre (CH3_CENTER_US)         =    0 % arrêt (zone morte)
+//   manche vers CH3_ZERO_US (haut) = -100 % marche ARRIÈRE
+static constexpr uint16_t CH3_FULL_US   = 1100;  // extrémité avant (+100 %)
+static constexpr uint16_t CH3_ZERO_US   = 1990;  // extrémité arrière (-100 %)
+static constexpr uint16_t CH3_CENTER_US = 1545;  // neutre = milieu de course — À VÉRIFIER au banc
 
 // Mode selector thresholds — CH5 three-position switch (PTR-6A outputs ~1000/1500/2000 µs)
 // ≤1250 → Automatic | 1400–1600 → Sail (inerte) | >1800 → Manual
