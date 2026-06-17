@@ -25,11 +25,14 @@ static constexpr uint16_t ROTOR_MIN_US    = 1417;  // -90°
 static constexpr uint16_t ROTOR_MAX_US    = 1583;  // +90°
 static constexpr float    ROTOR_RANGE_DEG = 90.0f; // physical half-travel for ROTOR_MIN/MAX
 
-// Autonomous navigation deliberately uses only a gentle slice of the winch
-// travel — the full ±90° proved far too aggressive for steering. The nav
-// rudder command (degrees) maps 1:1 onto physical winch degrees, clamped to
-// this limit. Tune here if the boat under/over-steers in auto mode.
-static constexpr float    ROTOR_AUTO_RANGE_DEG = 20.0f; // ±20° winch travel in auto
+// Autonomous navigation uses the FULL navigation command range
+// (±NAV_RUDDER_COMMAND_LIMIT_DEG = ±110°, defined in navigation.h), mapped 1:1
+// onto physical winch degrees at the same scale as manual (≈0.92 µs/°). This
+// deliberately exceeds the manual ±90° envelope, so auto gets its own wider
+// physical bounds (manual keeps ROTOR_MIN/MAX = ±90°, it self-limits).
+//   1500 ± 110° × (83 µs / 90°) ≈ 1399 / 1601 µs
+static constexpr uint16_t ROTOR_AUTO_MIN_US = 1399;  // -110°
+static constexpr uint16_t ROTOR_AUTO_MAX_US = 1601;  // +110°
 
 // Pro-Tronik Black Fet ESCs — BIDIRECTIONAL throttle (avant / arrière).
 //   1000 µs = pleine marche ARRIÈRE | 1500 µs = neutre/arrêt | 2000 µs = pleine marche AVANT

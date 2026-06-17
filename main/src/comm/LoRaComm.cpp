@@ -41,7 +41,8 @@ void LoRaComm::sendHeartbeat(ControlMode mode, MissionState mState,
     // Sail: binaire ±10° selon position par rapport au centre
     const int8_t sailDeg = (sailUs >= Calibration::SAIL_CENTER_US) ? 10 : -10;
 
-    // Rotor: interpolation linéaire (ROTOR_MIN_US–ROTOR_MAX_US) → (-90°–+90°)
+    // Rotor: interpolation linéaire ROTOR_MIN/MAX (1417/1583 µs) → ±90°.
+    // Même pente en auto, donc extrapole correctement jusqu'à ±110° (1399/1601 µs).
     const int16_t rotorDeg = (int16_t)(
         -Calibration::ROTOR_RANGE_DEG + (float)(rotorUs - Calibration::ROTOR_MIN_US)
         / (float)(Calibration::ROTOR_MAX_US - Calibration::ROTOR_MIN_US)

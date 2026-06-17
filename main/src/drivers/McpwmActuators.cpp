@@ -70,9 +70,12 @@ void McpwmActuators::write(const ActuatorCommand& cmd) {
     if (!initialized_) return;
 
     const uint16_t sail  = clamp(cmd.sailUs,  1000, 2000);
+    // Safety net widened to the autonomous winch envelope (±110°). Manual mode
+    // self-limits to ROTOR_MIN/MAX (±90°) in ManualController, so this only
+    // grants the extra travel to autonomous steering.
     const uint16_t rotor = clamp(cmd.rotorUs,
-                             Calibration::ROTOR_MIN_US,
-                             Calibration::ROTOR_MAX_US);
+                             Calibration::ROTOR_AUTO_MIN_US,
+                             Calibration::ROTOR_AUTO_MAX_US);
     const uint16_t e1t   = clamp(cmd.esc1Us,  Calibration::ESC_REVERSE_MIN_US, Calibration::ESC_MAX_US);
 
     outEsc1Us_ = slew(outEsc1Us_, e1t, Calibration::ESC_SLEW_US);

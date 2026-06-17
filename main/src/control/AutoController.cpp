@@ -10,26 +10,25 @@ uint16_t AutoController::sailToUs(float sailAngleDeg) {
 }
 
 // Convert the navigation rudder command (degrees) into a winch µs target.
-// Autonomous steering is limited to a gentle ±ROTOR_AUTO_RANGE_DEG of winch
-// travel — the full ±90° physical range proved far too aggressive. Nav rudder
-// degrees map 1:1 onto physical winch degrees.
+// Autonomous steering uses the FULL range the navigation expects
+// (±NAV_RUDDER_COMMAND_LIMIT_DEG = ±110°) — no artificial envelope — mapped 1:1
+// onto physical winch degrees, exactly like the simulation.
 uint16_t AutoController::rudderToUs(float rudderAngleDeg) {
-    // Clamp the command to the autonomous steering envelope (±20° by default).
-    const float lim = Calibration::ROTOR_AUTO_RANGE_DEG;
+    // Defensive clamp to the navigation command range (nav already bounds it).
+    const float lim = NAV_RUDDER_COMMAND_LIMIT_DEG;
     if (rudderAngleDeg >  lim) rudderAngleDeg =  lim;
     if (rudderAngleDeg < -lim) rudderAngleDeg = -lim;
 
-    // 1° of nav command == 1° of physical winch rotation.
-    // ROTOR_MIN/MAX span the full ±ROTOR_RANGE_DEG (±90°).
+    // 1° of nav command == 1° of physical winch rotation (same scale as manual).
     const float usPerDeg =
         (float)(Calibration::ROTOR_MAX_US - Calibration::ROTOR_CENTER_US)
         / Calibration::ROTOR_RANGE_DEG;          // 83 µs / 90° ≈ 0.92 µs/°
     int32_t us = (int32_t)Calibration::ROTOR_CENTER_US
                + (int32_t)lroundf(rudderAngleDeg * usPerDeg);
 
-    // Safety clamp to the physical winch limits.
-    if (us < (int32_t)Calibration::ROTOR_MIN_US) us = Calibration::ROTOR_MIN_US;
-    if (us > (int32_t)Calibration::ROTOR_MAX_US) us = Calibration::ROTOR_MAX_US;
+    // Safety clamp to the autonomous winch envelope (±110°, wider than manual).
+    if (us < (int32_t)Calibration::ROTOR_AUTO_MIN_US) us = Calibration::ROTOR_AUTO_MIN_US;
+    if (us > (int32_t)Calibration::ROTOR_AUTO_MAX_US) us = Calibration::ROTOR_AUTO_MAX_US;
     return (uint16_t)us;
 }
 
